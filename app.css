@@ -1,0 +1,33 @@
+:root {
+  --bg: #f8fafc; --surface: #ffffff; --surface-2: #f1f5f9; --ink: #0f172a; --ink-2: #475569; --muted: #64748b; --line: #e2e8f0; --brand: #2563eb;
+  --ok-bg: #d1fae5; --ok-fg: #047857; --warn-bg: #fef3c7; --warn-fg: #b45309; --bad-bg: #ffe4e6; --bad-fg: #be123c; --info-bg: #dbeafe; --info-fg: #1d4ed8;
+  --c1: #2a78d6; --grid: #e1e0d9; --axis: #c3c2b7;
+  --paper: #ffffff; --paper-ink: #0f172a; --paper-line: #cbd5e1;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b1220; --surface: #111a2e; --surface-2: #17223b; --ink: #e6edf7; --ink-2: #aab6cc; --muted: #8593ab; --line: #243252; --brand: #60a5fa;
+    --ok-bg: #0b3a2c; --ok-fg: #6ee7b7; --warn-bg: #3d2e08; --warn-fg: #fcd34d; --bad-bg: #461526; --bad-fg: #fda4af; --info-bg: #12294f; --info-fg: #93c5fd;
+    --c1: #3987e5; --grid: #2c2c2a; --axis: #383835;
+    color-scheme: dark;
+  }
+}
+html, body { margin: 0; background: var(--bg); }
+body { color: var(--ink); font-family: "Figtree", system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 15px; line-height: 1.45; -webkit-text-size-adjust: 100%; overflow-x: hidden; }
+[hidden] { display: none !important; }
+img { max-width: 100%; }
+.font-display { font-family: "Bricolage Grotesque", "Figtree", system-ui, sans-serif; }
+.num { font-variant-numeric: tabular-nums; }
+.gutter { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.hero-grad { background: linear-gradient(120deg, #2563eb 0%, #38bdf8 100%); }
+button { font-family: inherit; }
+button:disabled { opacity: .55; cursor: not-allowed; }
+.boot { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--muted); font-weight: 600; }
+.pulse-dot { animation: pulse 1.8s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
+@keyframes rise { from { transform: translateY(14px); opacity: 0 } to { transform: none; opacity: 1 } }
+.sheet { animation: rise .22s ease-out; }
+@media (prefers-reduced-motion: reduce) { .pulse-dot, .sheet { animation: none; } }
+.recharts-wrapper:focus, .recharts-surface:focus { outline: none; }
+pre.code { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 12px; padding: 12px; font-size: 12px; line-height: 1.5; overflow-x: auto; max-width: 100%; white-space: pre; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }

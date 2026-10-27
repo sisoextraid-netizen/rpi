@@ -1,0 +1,2505 @@
+(function() {
+  const { useState, useEffect, useMemo, useRef, useCallback, createContext, useContext } = React;
+  const CFG = window.RPI_CONFIG || {};
+  const LOGO = "./icons/logo.png";
+  const LS_DISMISS = "rpi_install_dismissed";
+  const LS_INSTALLED = "rpi_installed";
+  const SETTINGS_ID = "00000000-0000-4000-8000-000000000001";
+  const DEFAULT_SETTINGS = { id: SETTINGS_ID, org_name: "Rumah Pelopor Indonesia", org_logo_url: null, bank_accounts: [], receipt_footer_text: "" };
+  const EMPTY_DB = { profiles: [], donation_categories: [], donors: [], volunteer_visits: [], donations: [], settings: DEFAULT_SETTINGS };
+  const sb = CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY && window.supabase ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } }) : null;
+  const STATUSES = ["Prospek", "Berminat", "Menolak", "Berhasil"];
+  const METHODS = ["Cash Relawan", "Transfer BNI", "Transfer Mandiri", "Transfer BSI", "QRIS"];
+  const METHOD_SHORT = { "Cash Relawan": "Cash", "Transfer BNI": "BNI", "Transfer Mandiri": "Mandiri", "Transfer BSI": "BSI", QRIS: "QRIS" };
+  const TONE_BY_STATUS = { Prospek: "warn", Berminat: "info", Menolak: "bad", Berhasil: "ok", Pending: "warn", Verified: "ok", Rejected: "bad" };
+  const TONE_CLASS = { ok: "bg-okbg text-okfg", warn: "bg-warnbg text-warnfg", bad: "bg-badbg text-badfg", info: "bg-infobg text-infofg" };
+  const STATUS_ICON = { Prospek: "Clock", Berminat: "Heart", Menolak: "XCircle", Berhasil: "CheckCircle2", Pending: "Clock", Verified: "CheckCircle2", Rejected: "XCircle" };
+  const ROLE_LABEL = { volunteer: "Relawan", coordinator: "Koordinator", owner_admin: "Owner / Admin" };
+  const NAV = {
+    volunteer: [
+      { id: "home", label: "Beranda", icon: "Home" },
+      { id: "report", label: "Lapor", icon: "PlusCircle" },
+      { id: "history", label: "Riwayat", icon: "History" }
+    ],
+    coordinator: [
+      { id: "monitor", label: "Monitoring", icon: "Activity" },
+      { id: "moves", label: "Pergerakan", icon: "MapPin" }
+    ],
+    owner_admin: [
+      { id: "dash", label: "Dashboard", icon: "LayoutDashboard" },
+      { id: "verify", label: "Verifikasi", icon: "ShieldCheck" },
+      { id: "master", label: "Master", icon: "Settings" },
+      { id: "export", label: "Ekspor", icon: "Download" }
+    ]
+  };
+  const CARD = "bg-surface border border-line rounded-2xl";
+  const BTN = "inline-flex items-center justify-center gap-2 min-h-[44px] px-4 rounded-xl font-semibold text-[15px] transition active:scale-[.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500";
+  const CTA = BTN + " bg-pink-600 hover:bg-pink-700 text-white";
+  const GHOST = BTN + " bg-surface-2 hover:brightness-95 text-ink border border-line";
+  const SMALL = "inline-flex items-center justify-center gap-1.5 min-h-[36px] px-3 rounded-lg text-[13px] font-semibold transition active:scale-[.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500";
+  const INPUT = "w-full min-h-[44px] rounded-xl border border-line bg-surface text-ink px-3 text-[15px] placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-blue-500";
+  const LABEL = "block text-[13px] font-semibold text-ink-2 mb-1.5";
+  const pad = (n) => String(n).padStart(2, "0");
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+  const isoDay = (d) => {
+    d = new Date(d);
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+  };
+  const fmtShort = (d) => {
+    d = new Date(d);
+    return d.getDate() + " " + MONTHS[d.getMonth()];
+  };
+  const fmtDate = (d) => {
+    d = new Date(d);
+    return d.getDate() + " " + MONTHS[d.getMonth()] + " " + d.getFullYear();
+  };
+  const fmtTime = (d) => {
+    d = new Date(d);
+    return pad(d.getHours()) + ":" + pad(d.getMinutes());
+  };
+  const fmtDT = (d) => fmtDate(d) + ", " + fmtTime(d);
+  const rupiah = (n) => "Rp " + new Intl.NumberFormat("id-ID").format(Math.round(n || 0));
+  const shortRp = (n) => {
+    n = Number(n) || 0;
+    if (n >= 1e9)
+      return (n / 1e9).toFixed(1).replace(".0", "") + " M";
+    if (n >= 1e6)
+      return (n / 1e6).toFixed(1).replace(".0", "") + " jt";
+    if (n >= 1000)
+      return Math.round(n / 1000) + " rb";
+    return String(n);
+  };
+  const sum = (arr, f) => arr.reduce((a, x) => a + (f ? f(x) : x), 0);
+  const startOfDay = (t) => {
+    const d = new Date(t);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+  const timeAgo = (t) => {
+    const s = Math.max(0, (Date.now() - new Date(t).getTime()) / 1000);
+    if (s < 60)
+      return "baru saja";
+    if (s < 3600)
+      return Math.floor(s / 60) + " menit lalu";
+    if (s < 86400)
+      return Math.floor(s / 3600) + " jam lalu";
+    return Math.floor(s / 86400) + " hari lalu";
+  };
+  const uid = () => window.crypto && crypto.randomUUID ? crypto.randomUUID() : "xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx".replace(/x/g, () => Math.floor(Math.random() * 16).toString(16));
+  const lsGet = (k) => {
+    try {
+      return localStorage.getItem(k);
+    } catch (e) {
+      return null;
+    }
+  };
+  const lsSet = (k, v) => {
+    try {
+      localStorage.setItem(k, v);
+    } catch (e) {}
+  };
+  const lsDel = (k) => {
+    try {
+      localStorage.removeItem(k);
+    } catch (e) {}
+  };
+  const receiptNo = (d) => "RPI-" + isoDay(d.created_at).replace(/-/g, "") + "-" + String(d.id).slice(-4).toUpperCase();
+  const waNumber = (p) => {
+    const x = String(p || "").replace(/\D/g, "");
+    return x.startsWith("0") ? "62" + x.slice(1) : x;
+  };
+  function terbilang(n) {
+    n = Math.floor(n);
+    const s = ["", "satu", "dua", "tiga", "empat", "lima", "enam", "tujuh", "delapan", "sembilan", "sepuluh", "sebelas"];
+    const f = (x) => {
+      if (x < 12)
+        return s[x];
+      if (x < 20)
+        return s[x - 10] + " belas";
+      if (x < 100)
+        return s[Math.floor(x / 10)] + " puluh" + (x % 10 ? " " + s[x % 10] : "");
+      if (x < 200)
+        return "seratus" + (x - 100 ? " " + f(x - 100) : "");
+      if (x < 1000)
+        return s[Math.floor(x / 100)] + " ratus" + (x % 100 ? " " + f(x % 100) : "");
+      if (x < 2000)
+        return "seribu" + (x - 1000 ? " " + f(x - 1000) : "");
+      if (x < 1e6)
+        return f(Math.floor(x / 1000)) + " ribu" + (x % 1000 ? " " + f(x % 1000) : "");
+      if (x < 1e9)
+        return f(Math.floor(x / 1e6)) + " juta" + (x % 1e6 ? " " + f(x % 1e6) : "");
+      if (x < 1000000000000)
+        return f(Math.floor(x / 1e9)) + " miliar" + (x % 1e9 ? " " + f(x % 1e9) : "");
+      return String(x);
+    };
+    const out = n === 0 ? "nol" : f(n);
+    return out.charAt(0).toUpperCase() + out.slice(1) + " rupiah";
+  }
+  async function copyText(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (e) {}
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch (e) {
+      return false;
+    }
+  }
+  function imageToDataUrl(file, max, type) {
+    return new Promise((resolve, reject) => {
+      const fr = new FileReader;
+      fr.onerror = () => reject(new Error("File tidak dapat dibaca"));
+      fr.onload = () => {
+        const img = new Image;
+        img.onerror = () => reject(new Error("Pilih file gambar (JPG atau PNG)"));
+        img.onload = () => {
+          const sc = Math.min(1, max / Math.max(img.width, img.height));
+          const c = document.createElement("canvas");
+          c.width = Math.max(1, Math.round(img.width * sc));
+          c.height = Math.max(1, Math.round(img.height * sc));
+          c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+          resolve(type === "png" ? c.toDataURL("image/png") : c.toDataURL("image/jpeg", 0.7));
+        };
+        img.src = fr.result;
+      };
+      fr.readAsDataURL(file);
+    });
+  }
+  function dataUrlToBlob(u) {
+    const parts = u.split(",");
+    const mime = (parts[0].match(/:(.*?);/) || [null, "image/jpeg"])[1];
+    const bin = atob(parts[1]);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0;i < bin.length; i++)
+      arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+  }
+  function friendlyError(e) {
+    const m = e && e.message || String(e || "");
+    if (e && (e.code === "42501" || /row-level security|permission denied/i.test(m)))
+      return "Izin ditolak. Peran Anda tidak boleh melakukan aksi ini.";
+    if (e && e.code === "23503")
+      return "Data terkait tidak ditemukan atau masih dipakai.";
+    if (e && e.code === "23505")
+      return "Data dengan nama yang sama sudah ada.";
+    if (/Failed to fetch|NetworkError|Load failed/i.test(m))
+      return "Tidak ada koneksi internet.";
+    return m || "Terjadi kesalahan";
+  }
+  function printReceipt(o) {
+    const { d, st } = o;
+    const w = window.open("", "_blank");
+    if (!w)
+      return false;
+    const e = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    const abs = new URL(o.logo, location.href).href;
+    const verified = d.verification_status === "Verified";
+    const rows = [["Diterima dari", d.donor ? d.donor.name : "-"], ["Tanggal", fmtDT(d.created_at)], ["Kategori", d.category ? d.category.name : "-"], ["Metode", d.payment_method], ["Relawan", d.volunteer ? d.volunteer.full_name : "-"]];
+    if (d.volunteer && d.volunteer.phone)
+      rows.push(["Kontak relawan", d.volunteer.phone]);
+    const html = '<!doctype html><html lang="id"><head><meta charset="utf-8"><title>' + e(receiptNo(d)) + "</title><style>" + "body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;margin:0;padding:24px}.box{max-width:560px;margin:0 auto;border:1px solid #cbd5e1;border-radius:12px;padding:24px}" + ".hd{display:flex;gap:14px;align-items:center;border-bottom:2px solid #0f172a;padding-bottom:12px}.hd img{height:56px}.hd b{font-size:17px;display:block}.hd span{font-size:12px;color:#64748b}" + ".no{display:flex;justify-content:space-between;margin-top:14px;font-size:13px;font-weight:bold}.st{padding:2px 8px;border-radius:4px;font-size:11px;text-transform:uppercase;background:" + (verified ? "#d1fae5;color:#065f46" : "#fef3c7;color:#92400e") + "}" + ".amt{font-size:32px;font-weight:bold;margin:8px 0 2px}.tb{font-style:italic;color:#475569;font-size:13px;margin-bottom:10px}" + "table{width:100%;border-collapse:collapse;font-size:14px}td{padding:7px 0;border-top:1px dashed #cbd5e1;vertical-align:top}td:first-child{width:130px;color:#64748b}td:last-child{font-weight:bold}" + ".ft{margin-top:14px;padding-top:12px;border-top:1px dashed #cbd5e1;font-size:12.5px;color:#475569}@media print{body{padding:0}.box{border:0}}" + '</style></head><body><div class="box"><div class="hd"><img src="' + e(abs) + '" alt=""><div><b>' + e(st.org_name) + "</b><span>Kuitansi penerimaan donasi</span></div></div>" + '<div class="no"><span>' + e(receiptNo(d)) + '</span><span class="st">' + (verified ? "Terverifikasi" : "Menunggu verifikasi") + "</span></div>" + '<div class="amt">' + e(rupiah(d.amount)) + '</div><div class="tb">' + e(terbilang(d.amount)) + "</div>" + "<table>" + rows.map((r) => "<tr><td>" + e(r[0]) + "</td><td>" + e(r[1]) + "</td></tr>").join("") + "</table>" + (st.receipt_footer_text ? '<div class="ft">' + e(st.receipt_footer_text) + "</div>" : "") + "</div></body></html>";
+    w.document.write(html);
+    w.document.close();
+    const go = () => {
+      try {
+        w.focus();
+        w.print();
+      } catch (x) {}
+    };
+    const img = w.document.querySelector("img");
+    if (img && !img.complete) {
+      img.onload = go;
+      img.onerror = go;
+      setTimeout(go, 1500);
+    } else
+      setTimeout(go, 150);
+    return true;
+  }
+  function useOnline() {
+    const [on, setOn] = useState(navigator.onLine);
+    useEffect(() => {
+      const a = () => setOn(true), b = () => setOn(false);
+      window.addEventListener("online", a);
+      window.addEventListener("offline", b);
+      return () => {
+        window.removeEventListener("online", a);
+        window.removeEventListener("offline", b);
+      };
+    }, []);
+    return on;
+  }
+  function useStore(user, notify) {
+    const [db, setDb] = useState(EMPTY_DB);
+    const [ready, setReady] = useState(false);
+    const dbRef = useRef(db);
+    dbRef.current = db;
+    const timer = useRef(null);
+    const load = useCallback(async () => {
+      if (!sb)
+        return;
+      const names = ["profiles", "donation_categories", "donors", "volunteer_visits", "donations", "app_settings"];
+      const res = await Promise.all(names.map((n) => sb.from(n).select("*")));
+      const bad = res.find((r) => r.error);
+      if (bad) {
+        notify("Gagal memuat data: " + friendlyError(bad.error), "bad");
+        setReady(true);
+        return;
+      }
+      const st = res[5].data && res[5].data[0];
+      setDb({
+        profiles: res[0].data,
+        donation_categories: res[1].data.slice().sort((a, b) => a.name.localeCompare(b.name)),
+        donors: res[2].data,
+        volunteer_visits: res[3].data,
+        donations: res[4].data,
+        settings: st ? { ...DEFAULT_SETTINGS, ...st, bank_accounts: Array.isArray(st.bank_accounts) ? st.bank_accounts : [] } : DEFAULT_SETTINGS
+      });
+      setReady(true);
+    }, [notify]);
+    const uid_ = user ? user.id : null;
+    useEffect(() => {
+      if (!uid_) {
+        setDb(EMPTY_DB);
+        setReady(false);
+        return;
+      }
+      load();
+      let ch = null;
+      try {
+        ch = sb.channel("rpi-" + uid_).on("postgres_changes", { event: "*", schema: "public" }, () => {
+          clearTimeout(timer.current);
+          timer.current = setTimeout(load, 400);
+        }).subscribe();
+      } catch (e) {}
+      return () => {
+        clearTimeout(timer.current);
+        try {
+          if (ch)
+            sb.removeChannel(ch);
+        } catch (e) {}
+      };
+    }, [uid_, load]);
+    const actions = useMemo(() => {
+      const finish = async (r, needRows) => {
+        if (r.error) {
+          notify(friendlyError(r.error), "bad");
+          return false;
+        }
+        if (needRows && (!r.data || !r.data.length)) {
+          notify("Tidak ada data yang berubah. Cek izin peran Anda.", "bad");
+          return false;
+        }
+        await load();
+        return true;
+      };
+      return {
+        add: async (t, row) => finish(await sb.from(t).insert(row)),
+        addMany: async (list) => {
+          for (const item of list) {
+            const r = await sb.from(item[0]).insert(item[1]);
+            if (r.error) {
+              notify(friendlyError(r.error), "bad");
+              return false;
+            }
+          }
+          await load();
+          return true;
+        },
+        update: async (t, id, patch) => finish(await sb.from(t).update(patch).eq("id", id).select("id"), true),
+        remove: async (t, id) => finish(await sb.from(t).delete().eq("id", id).select("id"), true),
+        saveSettings: async (patch) => finish(await sb.from("app_settings").upsert({ ...dbRef.current.settings, ...patch }).select("id"), true)
+      };
+    }, [load, notify]);
+    return { db, ready, actions, reload: load };
+  }
+  const Ctx = createContext(null);
+  const useApp = () => useContext(Ctx);
+  const FallbackIcon = (p) => /* @__PURE__ */ React.createElement("svg", {
+    width: p.size || 18,
+    height: p.size || 18,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2",
+    "aria-hidden": "true"
+  }, /* @__PURE__ */ React.createElement("circle", {
+    cx: "12",
+    cy: "12",
+    r: "8"
+  }));
+  function Icon({ name, size = 18, className }) {
+    const C = window.lucideReact && window.lucideReact[name] || FallbackIcon;
+    return /* @__PURE__ */ React.createElement(C, {
+      size,
+      className,
+      strokeWidth: 2,
+      "aria-hidden": "true"
+    });
+  }
+  function Badge({ status }) {
+    return /* @__PURE__ */ React.createElement("span", {
+      className: "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-semibold whitespace-nowrap " + TONE_CLASS[TONE_BY_STATUS[status] || "info"]
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: STATUS_ICON[status] || "Circle",
+      size: 13
+    }), status);
+  }
+  function Metric({ label, value, sub, icon }) {
+    return /* @__PURE__ */ React.createElement("div", {
+      className: CARD + " p-4 min-w-0"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center gap-2 text-muted text-[13px] font-semibold"
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: icon,
+      size: 16
+    }), /* @__PURE__ */ React.createElement("span", {
+      className: "truncate"
+    }, label)), /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[24px] leading-tight mt-2 num break-words"
+    }, value), sub ? /* @__PURE__ */ React.createElement("div", {
+      className: "text-[12.5px] text-muted mt-1"
+    }, sub) : null);
+  }
+  function Sheet({ title, onClose, children, wide }) {
+    useEffect(() => {
+      const h = (e) => {
+        if (e.key === "Escape")
+          onClose();
+      };
+      window.addEventListener("keydown", h);
+      return () => window.removeEventListener("keydown", h);
+    }, [onClose]);
+    return /* @__PURE__ */ React.createElement("div", {
+      className: "fixed inset-0 z-50 flex items-end md:items-center justify-center bg-black/55",
+      onClick: onClose,
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": title
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "sheet bg-bg text-ink w-full " + (wide ? "md:max-w-2xl" : "md:max-w-md") + " max-h-[92%] overflow-y-auto rounded-t-3xl md:rounded-3xl border border-line",
+      onClick: (e) => e.stopPropagation(),
+      style: { paddingBottom: "env(safe-area-inset-bottom, 0px)" }
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "sticky top-0 bg-bg z-10 flex items-center justify-between gap-3 px-4 py-3 border-b border-line"
+    }, /* @__PURE__ */ React.createElement("h2", {
+      className: "font-display font-bold text-[18px] truncate"
+    }, title), /* @__PURE__ */ React.createElement("button", {
+      className: SMALL + " bg-surface-2 text-ink border border-line",
+      onClick: onClose,
+      "aria-label": "Tutup"
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "X",
+      size: 16
+    }), "Tutup")), /* @__PURE__ */ React.createElement("div", {
+      className: "p-4"
+    }, children)));
+  }
+  function Empty({ icon, title, text }) {
+    return /* @__PURE__ */ React.createElement("div", {
+      className: CARD + " p-8 text-center"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "mx-auto w-12 h-12 rounded-full bg-surface-2 flex items-center justify-center text-muted"
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: icon,
+      size: 22
+    })), /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[17px] mt-3"
+    }, title), /* @__PURE__ */ React.createElement("div", {
+      className: "text-muted text-[14px] mt-1"
+    }, text));
+  }
+  function CopyButton({ text, label = "Salin", className }) {
+    const { notify } = useApp();
+    return /* @__PURE__ */ React.createElement("button", {
+      className: className || SMALL + " bg-surface-2 text-ink border border-line",
+      onClick: async () => {
+        const ok = await copyText(text);
+        notify(ok ? "Tersalin ke clipboard" : "Gagal menyalin, pilih teks secara manual", ok ? "ok" : "bad");
+      }
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Copy",
+      size: 14
+    }), label);
+  }
+  function Seg({ options, value, onChange, label }) {
+    return /* @__PURE__ */ React.createElement("div", {
+      className: "inline-flex flex-wrap gap-1 p-1 rounded-xl bg-surface-2 border border-line",
+      role: "group",
+      "aria-label": label
+    }, options.map((o) => /* @__PURE__ */ React.createElement("button", {
+      key: o.value,
+      onClick: () => onChange(o.value),
+      "aria-pressed": value === o.value,
+      className: "min-h-[36px] px-3 rounded-lg text-[13.5px] font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 " + (value === o.value ? "bg-surface text-ink shadow-sm border border-line" : "text-muted border border-transparent")
+    }, o.label)));
+  }
+  function useDerived() {
+    const { db } = useApp();
+    return useMemo(() => {
+      const idx = (arr) => Object.fromEntries(arr.map((x) => [x.id, x]));
+      const profilesById = idx(db.profiles), donorsById = idx(db.donors), catsById = idx(db.donation_categories);
+      const donationByVisit = {};
+      db.donations.forEach((d) => {
+        if (d.visit_id)
+          donationByVisit[d.visit_id] = d;
+      });
+      const visits = db.volunteer_visits.map((v) => ({ ...v, donor: donorsById[v.donor_id], volunteer: profilesById[v.volunteer_id], donation: donationByVisit[v.visit_id] || donationByVisit[v.id] })).sort((a, b) => new Date(b.visit_date) - new Date(a.visit_date));
+      const donations = db.donations.map((d) => ({ ...d, donor: donorsById[d.donor_id], volunteer: profilesById[d.volunteer_id], category: catsById[d.category_id] })).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+      return { profilesById, donorsById, catsById, visits, donations };
+    }, [db]);
+  }
+  function VisitCard({ v }) {
+    const { openReceipt, openProof } = useApp();
+    const d = v.donation;
+    return /* @__PURE__ */ React.createElement("div", {
+      className: CARD + " p-4"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-start justify-between gap-3"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "min-w-0"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "font-semibold text-[16px] truncate"
+    }, v.donor ? v.donor.name : "Donatur"), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[13px] text-muted"
+    }, fmtDT(v.visit_date), v.volunteer ? " · " + v.volunteer.full_name : "")), /* @__PURE__ */ React.createElement(Badge, {
+      status: v.status
+    })), v.notes ? /* @__PURE__ */ React.createElement("p", {
+      className: "text-[14px] text-ink-2 mt-2 break-words"
+    }, v.notes) : null, d ? /* @__PURE__ */ React.createElement("div", {
+      className: "mt-3 pt-3 border-t border-line flex flex-wrap items-center justify-between gap-2"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "min-w-0"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[18px] num"
+    }, rupiah(d.amount)), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[12.5px] text-muted"
+    }, d.category && d.category.name || "Tanpa kategori", " · ", d.payment_method)), /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center gap-2 flex-wrap"
+    }, /* @__PURE__ */ React.createElement(Badge, {
+      status: d.verification_status
+    }), d.proof_url ? /* @__PURE__ */ React.createElement("button", {
+      className: SMALL + " bg-surface-2 text-ink border border-line",
+      onClick: () => openProof(d.id)
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Image",
+      size: 14
+    }), "Bukti") : null, d.verification_status !== "Rejected" ? /* @__PURE__ */ React.createElement("button", {
+      className: SMALL + " bg-pink-600 hover:bg-pink-700 text-white",
+      onClick: () => openReceipt(d.id)
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Receipt",
+      size: 14
+    }), "Kuitansi") : null)) : null);
+  }
+  function VolunteerHome() {
+    const { me, setTab } = useApp();
+    const { visits, donations } = useDerived();
+    const mine = visits.filter((v) => v.volunteer_id === me.id);
+    const myDon = donations.filter((d) => d.volunteer_id === me.id);
+    const today = mine.filter((v) => startOfDay(v.visit_date) === startOfDay(Date.now()));
+    const verified = sum(myDon.filter((d) => d.verification_status === "Verified"), (d) => d.amount);
+    const pending = myDon.filter((d) => d.verification_status === "Pending");
+    const won = mine.filter((v) => v.status === "Berhasil").length;
+    const conv = mine.length ? Math.round(won / mine.length * 100) : 0;
+    return /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-4"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "hero-grad rounded-2xl p-5 text-white"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "text-[13px] font-semibold opacity-90"
+    }, "Halo, ", me.full_name.split(" ")[0]), /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[22px] leading-snug mt-1 text-balance"
+    }, "Sudah ada ", today.length, " kunjungan hari ini."), /* @__PURE__ */ React.createElement("button", {
+      className: CTA + " mt-4 w-full sm:w-auto",
+      onClick: () => setTab("report")
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "PlusCircle",
+      size: 18
+    }), "Lapor Kunjungan Baru")), /* @__PURE__ */ React.createElement("div", {
+      className: "grid grid-cols-2 gap-3"
+    }, /* @__PURE__ */ React.createElement(Metric, {
+      label: "Total kunjungan",
+      value: mine.length,
+      sub: won + " berhasil · " + conv + "%",
+      icon: "MapPin"
+    }), /* @__PURE__ */ React.createElement(Metric, {
+      label: "Dana terverifikasi",
+      value: rupiah(verified),
+      sub: "Hanya donasi Verified",
+      icon: "Wallet"
+    }), /* @__PURE__ */ React.createElement(Metric, {
+      label: "Menunggu verifikasi",
+      value: pending.length,
+      sub: rupiah(sum(pending, (d) => d.amount)),
+      icon: "Clock"
+    }), /* @__PURE__ */ React.createElement(Metric, {
+      label: "Hari ini",
+      value: today.length,
+      sub: "kunjungan tercatat",
+      icon: "CalendarDays"
+    })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center justify-between mb-2"
+    }, /* @__PURE__ */ React.createElement("h2", {
+      className: "font-display font-bold text-[18px]"
+    }, "Kunjungan terbaru"), /* @__PURE__ */ React.createElement("button", {
+      className: "text-[13.5px] font-semibold text-brand min-h-[36px]",
+      onClick: () => setTab("history")
+    }, "Lihat semua")), /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-3"
+    }, mine.slice(0, 3).map((v) => /* @__PURE__ */ React.createElement(VisitCard, {
+      key: v.id,
+      v
+    })), !mine.length ? /* @__PURE__ */ React.createElement(Empty, {
+      icon: "MapPin",
+      title: "Belum ada kunjungan",
+      text: "Laporan pertama Anda akan muncul di sini."
+    }) : null)));
+  }
+  function ReportForm() {
+    const { db, actions, me, notify, setTab, openReceipt } = useApp();
+    const donorsSorted = useMemo(() => [...db.donors].sort((a, b) => a.name.localeCompare(b.name)), [db.donors]);
+    const activeCats = db.donation_categories.filter((c) => c.is_active);
+    const [mode, setMode] = useState("existing");
+    const [donorId, setDonorId] = useState("");
+    const [nd, setNd] = useState({ name: "", wa: "", addr: "" });
+    const [status, setStatus] = useState("Prospek");
+    const [notes, setNotes] = useState("");
+    const [date, setDate] = useState(isoDay(Date.now()));
+    const [amount, setAmount] = useState("");
+    const [cat, setCat] = useState("");
+    const [method, setMethod] = useState("Cash Relawan");
+    const [proof, setProof] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+    const isWin = status === "Berhasil";
+    const needProof = isWin && method !== "Cash Relawan";
+    async function onFile(e) {
+      const f = e.target.files && e.target.files[0];
+      if (!f)
+        return;
+      setBusy(true);
+      try {
+        setProof(await imageToDataUrl(f, 1000, "jpeg"));
+        setErr("");
+      } catch (x) {
+        setErr(x.message);
+      }
+      setBusy(false);
+    }
+    async function submit(e) {
+      e.preventDefault();
+      if (busy)
+        return;
+      if (mode === "existing" && !donorId)
+        return setErr("Pilih donatur atau tambahkan donatur baru.");
+      if (mode === "new" && !nd.name.trim())
+        return setErr("Nama donatur wajib diisi.");
+      const amt = Number(String(amount).replace(/\D/g, ""));
+      if (isWin) {
+        if (!amt)
+          return setErr("Isi nominal donasi.");
+        if (!cat)
+          return setErr("Pilih kategori donasi.");
+        if (needProof && !proof)
+          return setErr("Unggah bukti transfer atau QRIS terlebih dahulu.");
+      }
+      setBusy(true);
+      setErr("");
+      try {
+        const list = [];
+        let did = donorId;
+        if (mode === "new") {
+          did = uid();
+          list.push(["donors", { id: did, name: nd.name.trim(), whatsapp: nd.wa.trim(), address: nd.addr.trim(), created_by: me.id }]);
+        }
+        const vid = uid();
+        list.push(["volunteer_visits", { id: vid, volunteer_id: me.id, donor_id: did, status, notes: notes.trim(), visit_date: new Date(date + "T" + fmtTime(Date.now())).toISOString() }]);
+        let donId = null;
+        if (isWin) {
+          donId = uid();
+          let path = null;
+          if (method !== "Cash Relawan") {
+            path = me.id + "/" + donId + ".jpg";
+            const up = await sb.storage.from("proofs").upload(path, dataUrlToBlob(proof), { contentType: "image/jpeg" });
+            if (up.error)
+              throw new Error("Gagal mengunggah bukti: " + friendlyError(up.error));
+          }
+          list.push(["donations", { id: donId, visit_id: vid, volunteer_id: me.id, donor_id: did, amount: amt, category_id: cat, payment_method: method, proof_url: path, verification_status: "Pending" }]);
+        }
+        const ok = await actions.addMany(list);
+        if (!ok) {
+          setBusy(false);
+          return;
+        }
+        setDonorId("");
+        setNd({ name: "", wa: "", addr: "" });
+        setStatus("Prospek");
+        setNotes("");
+        setAmount("");
+        setCat("");
+        setProof(null);
+        setMethod("Cash Relawan");
+        setMode("existing");
+        notify(isWin ? "Laporan dan donasi tersimpan, menunggu verifikasi" : "Laporan kunjungan tersimpan");
+        setTab("history");
+        if (donId)
+          openReceipt(donId);
+      } catch (x) {
+        setErr(friendlyError(x));
+      }
+      setBusy(false);
+    }
+    return /* @__PURE__ */ React.createElement("form", {
+      className: "grid gap-4",
+      onSubmit: submit,
+      noValidate: true
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: CARD + " p-4 grid gap-4"
+    }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center justify-between mb-1.5"
+    }, /* @__PURE__ */ React.createElement("label", {
+      className: "text-[13px] font-semibold text-ink-2",
+      htmlFor: "donor-sel"
+    }, "Donatur"), /* @__PURE__ */ React.createElement("button", {
+      type: "button",
+      className: "text-[13px] font-semibold text-brand min-h-[32px]",
+      onClick: () => {
+        setMode(mode === "existing" ? "new" : "existing");
+        setErr("");
+      }
+    }, mode === "existing" ? "+ Donatur baru" : "Pilih dari daftar")), mode === "existing" ? /* @__PURE__ */ React.createElement("select", {
+      id: "donor-sel",
+      className: INPUT,
+      value: donorId,
+      onChange: (e) => setDonorId(e.target.value)
+    }, /* @__PURE__ */ React.createElement("option", {
+      value: ""
+    }, donorsSorted.length ? "Pilih donatur…" : "Belum ada donatur, tambahkan donatur baru"), donorsSorted.map((d) => /* @__PURE__ */ React.createElement("option", {
+      key: d.id,
+      value: d.id
+    }, d.name))) : /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-3"
+    }, /* @__PURE__ */ React.createElement("input", {
+      id: "nd-name",
+      className: INPUT,
+      placeholder: "Nama lengkap donatur",
+      value: nd.name,
+      onChange: (e) => setNd({ ...nd, name: e.target.value })
+    }), /* @__PURE__ */ React.createElement("input", {
+      id: "nd-wa",
+      className: INPUT,
+      inputMode: "tel",
+      placeholder: "Nomor WhatsApp, contoh 0812xxxxxxx",
+      value: nd.wa,
+      onChange: (e) => setNd({ ...nd, wa: e.target.value })
+    }), /* @__PURE__ */ React.createElement("textarea", {
+      id: "nd-addr",
+      className: INPUT + " py-2.5 min-h-[72px]",
+      placeholder: "Alamat",
+      value: nd.addr,
+      onChange: (e) => setNd({ ...nd, addr: e.target.value })
+    }))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", {
+      className: LABEL
+    }, "Status kunjungan"), /* @__PURE__ */ React.createElement("div", {
+      className: "grid grid-cols-2 sm:grid-cols-4 gap-2"
+    }, STATUSES.map((s) => /* @__PURE__ */ React.createElement("button", {
+      key: s,
+      type: "button",
+      "aria-pressed": status === s,
+      onClick: () => setStatus(s),
+      className: "min-h-[48px] rounded-xl border text-[14px] font-semibold flex items-center justify-center gap-1.5 transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 " + (status === s ? TONE_CLASS[TONE_BY_STATUS[s]] + " border-current" : "bg-surface text-ink-2 border-line")
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: STATUS_ICON[s],
+      size: 16
+    }), s)))), /* @__PURE__ */ React.createElement("div", {
+      className: "grid sm:grid-cols-2 gap-3"
+    }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", {
+      className: LABEL,
+      htmlFor: "v-date"
+    }, "Tanggal kunjungan"), /* @__PURE__ */ React.createElement("input", {
+      id: "v-date",
+      type: "date",
+      className: INPUT,
+      value: date,
+      max: isoDay(Date.now()),
+      onChange: (e) => setDate(e.target.value || isoDay(Date.now()))
+    })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", {
+      className: LABEL,
+      htmlFor: "v-notes"
+    }, "Catatan"), /* @__PURE__ */ React.createElement("input", {
+      id: "v-notes",
+      className: INPUT,
+      placeholder: "Hasil obrolan, tindak lanjut",
+      value: notes,
+      onChange: (e) => setNotes(e.target.value)
+    })))), isWin ? /* @__PURE__ */ React.createElement("div", {
+      className: CARD + " p-4 grid gap-4"
+    }, /* @__PURE__ */ React.createElement("h2", {
+      className: "font-display font-bold text-[17px]"
+    }, "Detail donasi"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", {
+      className: LABEL,
+      htmlFor: "amt"
+    }, "Nominal (Rp)"), /* @__PURE__ */ React.createElement("input", {
+      id: "amt",
+      className: INPUT + " text-[18px] font-bold num",
+      inputMode: "numeric",
+      placeholder: "0",
+      value: amount ? new Intl.NumberFormat("id-ID").format(Number(String(amount).replace(/\D/g, ""))) : "",
+      onChange: (e) => setAmount(e.target.value.replace(/\D/g, ""))
+    }), /* @__PURE__ */ React.createElement("div", {
+      className: "flex flex-wrap gap-2 mt-2"
+    }, [50000, 1e5, 250000, 500000, 1e6].map((n) => /* @__PURE__ */ React.createElement("button", {
+      key: n,
+      type: "button",
+      className: SMALL + " bg-surface-2 text-ink border border-line",
+      onClick: () => setAmount(String(n))
+    }, shortRp(n))))), /* @__PURE__ */ React.createElement("div", {
+      className: "grid sm:grid-cols-2 gap-3"
+    }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", {
+      className: LABEL,
+      htmlFor: "cat"
+    }, "Kategori"), /* @__PURE__ */ React.createElement("select", {
+      id: "cat",
+      className: INPUT,
+      value: cat,
+      onChange: (e) => setCat(e.target.value)
+    }, /* @__PURE__ */ React.createElement("option", {
+      value: ""
+    }, "Pilih kategori…"), activeCats.map((c) => /* @__PURE__ */ React.createElement("option", {
+      key: c.id,
+      value: c.id
+    }, c.name)))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", {
+      className: LABEL,
+      htmlFor: "mth"
+    }, "Metode pembayaran"), /* @__PURE__ */ React.createElement("select", {
+      id: "mth",
+      className: INPUT,
+      value: method,
+      onChange: (e) => setMethod(e.target.value)
+    }, METHODS.map((m) => /* @__PURE__ */ React.createElement("option", {
+      key: m,
+      value: m
+    }, m))))), method !== "Cash Relawan" ? /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("span", {
+      className: LABEL
+    }, "Bukti ", method === "QRIS" ? "pembayaran QRIS" : "transfer"), /* @__PURE__ */ React.createElement("label", {
+      htmlFor: "proof",
+      className: "flex items-center justify-center gap-2 min-h-[88px] rounded-xl border-2 border-dashed border-line bg-surface-2 text-ink-2 font-semibold cursor-pointer text-center px-3"
+    }, proof ? /* @__PURE__ */ React.createElement("img", {
+      src: proof,
+      alt: "Pratinjau bukti",
+      className: "max-h-24 rounded-lg"
+    }) : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Upload",
+      size: 18
+    }), "Ketuk untuk unggah foto bukti")), /* @__PURE__ */ React.createElement("input", {
+      id: "proof",
+      type: "file",
+      accept: "image/*",
+      className: "sr-only",
+      onChange: onFile
+    }), proof ? /* @__PURE__ */ React.createElement("button", {
+      type: "button",
+      className: "text-[13px] font-semibold text-badfg mt-2 min-h-[32px]",
+      onClick: () => setProof(null)
+    }, "Hapus gambar") : null) : /* @__PURE__ */ React.createElement("p", {
+      className: "text-[13px] text-muted"
+    }, "Uang tunai dicatat atas nama relawan dan baru dihitung setelah diverifikasi admin.")) : null, err ? /* @__PURE__ */ React.createElement("div", {
+      role: "alert",
+      className: "rounded-xl bg-badbg text-badfg px-4 py-3 text-[14px] font-semibold flex items-start gap-2"
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "AlertCircle",
+      size: 18,
+      className: "shrink-0 mt-0.5"
+    }), err) : null, /* @__PURE__ */ React.createElement("button", {
+      type: "submit",
+      disabled: busy,
+      className: CTA + " w-full min-h-[52px] text-[16px]"
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Send",
+      size: 18
+    }), busy ? "Menyimpan…" : "Kirim Laporan"));
+  }
+  function History() {
+    const { me } = useApp();
+    const { visits } = useDerived();
+    const [f, setF] = useState("Semua");
+    const mine = visits.filter((v) => v.volunteer_id === me.id);
+    const shown = f === "Semua" ? mine : mine.filter((v) => v.status === f);
+    return /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-4"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex gap-2 overflow-x-auto pb-1 -mx-1 px-1"
+    }, ["Semua", ...STATUSES].map((s) => /* @__PURE__ */ React.createElement("button", {
+      key: s,
+      onClick: () => setF(s),
+      "aria-pressed": f === s,
+      className: "shrink-0 min-h-[36px] px-3.5 rounded-full text-[13.5px] font-semibold border transition " + (f === s ? "bg-brand text-white border-transparent" : "bg-surface text-ink-2 border-line"),
+      style: f === s ? { color: "#fff", background: "#2563eb" } : null
+    }, s, s !== "Semua" ? " " + mine.filter((v) => v.status === s).length : " " + mine.length))), /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-3 md:grid-cols-2"
+    }, shown.map((v) => /* @__PURE__ */ React.createElement(VisitCard, {
+      key: v.id,
+      v
+    }))), !shown.length ? /* @__PURE__ */ React.createElement(Empty, {
+      icon: "History",
+      title: "Belum ada riwayat",
+      text: "Kunjungan dengan status ini belum tercatat."
+    }) : null);
+  }
+  function Monitoring() {
+    const { db } = useApp();
+    const { visits, donations } = useDerived();
+    const vols = db.profiles.filter((p) => p.role === "volunteer");
+    const todayStart = startOfDay(Date.now());
+    const rows = vols.map((v) => {
+      const mv = visits.filter((x) => x.volunteer_id === v.id);
+      const md = donations.filter((x) => x.volunteer_id === v.id);
+      const last = mv[0] ? new Date(mv[0].visit_date).getTime() : 0;
+      const age = Date.now() - last;
+      const act = !last ? "Belum aktif" : age < 3 * 3600000 ? "Aktif" : last >= todayStart ? "Hari ini" : "Tidak aktif";
+      return { v, total: mv.length, today: mv.filter((x) => new Date(x.visit_date).getTime() >= todayStart).length, won: mv.filter((x) => x.status === "Berhasil").length, verified: sum(md.filter((x) => x.verification_status === "Verified"), (x) => x.amount), pending: md.filter((x) => x.verification_status === "Pending").length, last, act };
+    }).sort((a, b) => b.last - a.last);
+    const todayV = visits.filter((x) => new Date(x.visit_date).getTime() >= todayStart);
+    const activeNow = rows.filter((r) => r.act === "Aktif").length;
+    const totalWon = visits.filter((x) => x.status === "Berhasil").length;
+    const actTone = { Aktif: "ok", "Hari ini": "info", "Tidak aktif": "warn", "Belum aktif": "bad" };
+    const ActPill = ({ a }) => /* @__PURE__ */ React.createElement("span", {
+      className: "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold " + TONE_CLASS[actTone[a]]
+    }, /* @__PURE__ */ React.createElement("span", {
+      className: "w-2 h-2 rounded-full bg-current " + (a === "Aktif" ? "pulse-dot" : "")
+    }), a);
+    return /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-4"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "grid grid-cols-2 lg:grid-cols-4 gap-3"
+    }, /* @__PURE__ */ React.createElement(Metric, {
+      label: "Relawan aktif",
+      value: activeNow + " / " + vols.length,
+      sub: "lapor dalam 3 jam terakhir",
+      icon: "Users"
+    }), /* @__PURE__ */ React.createElement(Metric, {
+      label: "Kunjungan hari ini",
+      value: todayV.length,
+      sub: todayV.filter((x) => x.status === "Berhasil").length + " berhasil",
+      icon: "MapPin"
+    }), /* @__PURE__ */ React.createElement(Metric, {
+      label: "Total kunjungan tim",
+      value: visits.length,
+      sub: visits.length ? Math.round(totalWon / visits.length * 100) + "% konversi" : "-",
+      icon: "TrendingUp"
+    }), /* @__PURE__ */ React.createElement(Metric, {
+      label: "Dana terverifikasi",
+      value: rupiah(sum(donations.filter((d) => d.verification_status === "Verified"), (d) => d.amount)),
+      sub: "seluruh tim",
+      icon: "Wallet"
+    })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("h2", {
+      className: "font-display font-bold text-[18px] mb-2"
+    }, "Pergerakan relawan"), /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-3 md:hidden"
+    }, rows.map((r) => /* @__PURE__ */ React.createElement("div", {
+      key: r.v.id,
+      className: CARD + " p-4"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-start justify-between gap-2"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "min-w-0"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "font-semibold truncate"
+    }, r.v.full_name), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[12.5px] text-muted"
+    }, r.last ? "Terakhir " + timeAgo(r.last) : "Belum ada laporan")), /* @__PURE__ */ React.createElement(ActPill, {
+      a: r.act
+    })), /* @__PURE__ */ React.createElement("div", {
+      className: "grid grid-cols-3 gap-2 mt-3 text-center"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "bg-surface-2 rounded-xl py-2"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[18px] num"
+    }, r.today), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[11.5px] text-muted"
+    }, "Hari ini")), /* @__PURE__ */ React.createElement("div", {
+      className: "bg-surface-2 rounded-xl py-2"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[18px] num"
+    }, r.won, "/", r.total), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[11.5px] text-muted"
+    }, "Berhasil")), /* @__PURE__ */ React.createElement("div", {
+      className: "bg-surface-2 rounded-xl py-2"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[16px] num"
+    }, shortRp(r.verified)), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[11.5px] text-muted"
+    }, "Verified")))))), /* @__PURE__ */ React.createElement("div", {
+      className: CARD + " hidden md:block overflow-x-auto"
+    }, /* @__PURE__ */ React.createElement("table", {
+      className: "w-full text-[14px]"
+    }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", {
+      className: "text-left text-muted text-[12.5px] uppercase tracking-wide border-b border-line"
+    }, /* @__PURE__ */ React.createElement("th", {
+      className: "p-3 font-semibold"
+    }, "Relawan"), /* @__PURE__ */ React.createElement("th", {
+      className: "p-3 font-semibold"
+    }, "Status"), /* @__PURE__ */ React.createElement("th", {
+      className: "p-3 font-semibold text-right"
+    }, "Hari ini"), /* @__PURE__ */ React.createElement("th", {
+      className: "p-3 font-semibold text-right"
+    }, "Total"), /* @__PURE__ */ React.createElement("th", {
+      className: "p-3 font-semibold text-right"
+    }, "Berhasil"), /* @__PURE__ */ React.createElement("th", {
+      className: "p-3 font-semibold text-right"
+    }, "Dana verified"), /* @__PURE__ */ React.createElement("th", {
+      className: "p-3 font-semibold text-right"
+    }, "Pending"), /* @__PURE__ */ React.createElement("th", {
+      className: "p-3 font-semibold"
+    }, "Terakhir"))), /* @__PURE__ */ React.createElement("tbody", null, rows.map((r) => /* @__PURE__ */ React.createElement("tr", {
+      key: r.v.id,
+      className: "border-b border-line last:border-0"
+    }, /* @__PURE__ */ React.createElement("td", {
+      className: "p-3 font-semibold"
+    }, r.v.full_name), /* @__PURE__ */ React.createElement("td", {
+      className: "p-3"
+    }, /* @__PURE__ */ React.createElement(ActPill, {
+      a: r.act
+    })), /* @__PURE__ */ React.createElement("td", {
+      className: "p-3 text-right num"
+    }, r.today), /* @__PURE__ */ React.createElement("td", {
+      className: "p-3 text-right num"
+    }, r.total), /* @__PURE__ */ React.createElement("td", {
+      className: "p-3 text-right num"
+    }, r.won), /* @__PURE__ */ React.createElement("td", {
+      className: "p-3 text-right num"
+    }, rupiah(r.verified)), /* @__PURE__ */ React.createElement("td", {
+      className: "p-3 text-right num"
+    }, r.pending), /* @__PURE__ */ React.createElement("td", {
+      className: "p-3 text-muted"
+    }, r.last ? timeAgo(r.last) : "-"))))))));
+  }
+  function Moves() {
+    const { db } = useApp();
+    const { visits } = useDerived();
+    const [vol, setVol] = useState("all");
+    const [st, setSt] = useState("all");
+    const vols = db.profiles.filter((p) => p.role === "volunteer");
+    const shown = visits.filter((v) => (vol === "all" || v.volunteer_id === vol) && (st === "all" || v.status === st)).slice(0, 60);
+    return /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-4"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "grid sm:grid-cols-2 gap-3"
+    }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", {
+      className: LABEL,
+      htmlFor: "f-vol"
+    }, "Relawan"), /* @__PURE__ */ React.createElement("select", {
+      id: "f-vol",
+      className: INPUT,
+      value: vol,
+      onChange: (e) => setVol(e.target.value)
+    }, /* @__PURE__ */ React.createElement("option", {
+      value: "all"
+    }, "Semua relawan"), vols.map((v) => /* @__PURE__ */ React.createElement("option", {
+      key: v.id,
+      value: v.id
+    }, v.full_name)))), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", {
+      className: LABEL,
+      htmlFor: "f-st"
+    }, "Status kunjungan"), /* @__PURE__ */ React.createElement("select", {
+      id: "f-st",
+      className: INPUT,
+      value: st,
+      onChange: (e) => setSt(e.target.value)
+    }, /* @__PURE__ */ React.createElement("option", {
+      value: "all"
+    }, "Semua status"), STATUSES.map((s) => /* @__PURE__ */ React.createElement("option", {
+      key: s,
+      value: s
+    }, s))))), /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-3 md:hidden"
+    }, shown.map((v) => /* @__PURE__ */ React.createElement(VisitCard, {
+      key: v.id,
+      v
+    }))), /* @__PURE__ */ React.createElement("div", {
+      className: CARD + " hidden md:block overflow-x-auto"
+    }, /* @__PURE__ */ React.createElement("table", {
+      className: "w-full text-[14px]"
+    }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", {
+      className: "text-left text-muted text-[12.5px] uppercase tracking-wide border-b border-line"
+    }, /* @__PURE__ */ React.createElement("th", {
+      className: "p-3 font-semibold"
+    }, "Waktu"), /* @__PURE__ */ React.createElement("th", {
+      className: "p-3 font-semibold"
+    }, "Relawan"), /* @__PURE__ */ React.createElement("th", {
+      className: "p-3 font-semibold"
+    }, "Donatur"), /* @__PURE__ */ React.createElement("th", {
+      className: "p-3 font-semibold"
+    }, "Status"), /* @__PURE__ */ React.createElement("th", {
+      className: "p-3 font-semibold text-right"
+    }, "Donasi"), /* @__PURE__ */ React.createElement("th", {
+      className: "p-3 font-semibold"
+    }, "Verifikasi"))), /* @__PURE__ */ React.createElement("tbody", null, shown.map((v) => /* @__PURE__ */ React.createElement("tr", {
+      key: v.id,
+      className: "border-b border-line last:border-0"
+    }, /* @__PURE__ */ React.createElement("td", {
+      className: "p-3 whitespace-nowrap text-muted"
+    }, fmtDT(v.visit_date)), /* @__PURE__ */ React.createElement("td", {
+      className: "p-3 font-semibold"
+    }, v.volunteer ? v.volunteer.full_name : "-"), /* @__PURE__ */ React.createElement("td", {
+      className: "p-3"
+    }, v.donor ? v.donor.name : "-"), /* @__PURE__ */ React.createElement("td", {
+      className: "p-3"
+    }, /* @__PURE__ */ React.createElement(Badge, {
+      status: v.status
+    })), /* @__PURE__ */ React.createElement("td", {
+      className: "p-3 text-right num"
+    }, v.donation ? rupiah(v.donation.amount) : "-"), /* @__PURE__ */ React.createElement("td", {
+      className: "p-3"
+    }, v.donation ? /* @__PURE__ */ React.createElement(Badge, {
+      status: v.donation.verification_status
+    }) : /* @__PURE__ */ React.createElement("span", {
+      className: "text-muted"
+    }, "-"))))))), !shown.length ? /* @__PURE__ */ React.createElement(Empty, {
+      icon: "Search",
+      title: "Tidak ada data",
+      text: "Ubah filter untuk melihat kunjungan lain."
+    }) : null);
+  }
+  const ChartTip = ({ active, payload, label }) => {
+    if (!active || !payload || !payload.length)
+      return null;
+    return /* @__PURE__ */ React.createElement("div", {
+      className: "bg-surface text-ink border border-line rounded-xl px-3 py-2 text-[13px] shadow-lg"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "text-muted"
+    }, label || payload[0].payload.name), /* @__PURE__ */ React.createElement("div", {
+      className: "font-bold num"
+    }, rupiah(payload[0].value)));
+  };
+  function SimpleBars({ data, xKey }) {
+    const max = Math.max(1, ...data.map((d) => d.total));
+    return /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-2"
+    }, data.map((d, i) => /* @__PURE__ */ React.createElement("div", {
+      key: i,
+      className: "grid grid-cols-[96px_1fr_64px] items-center gap-2 text-[12.5px]"
+    }, /* @__PURE__ */ React.createElement("span", {
+      className: "truncate text-ink-2"
+    }, d[xKey]), /* @__PURE__ */ React.createElement("span", {
+      className: "h-3 rounded-sm",
+      style: { background: "var(--c1)", width: d.total / max * 100 + "%" }
+    }), /* @__PURE__ */ React.createElement("span", {
+      className: "num text-right text-muted"
+    }, shortRp(d.total)))));
+  }
+  function ChartCard({ title, sub, data, xKey, children }) {
+    const [table, setTable] = useState(false);
+    return /* @__PURE__ */ React.createElement("div", {
+      className: CARD + " p-4 min-w-0"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-start justify-between gap-3 mb-3"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "min-w-0"
+    }, /* @__PURE__ */ React.createElement("h3", {
+      className: "font-display font-bold text-[17px]"
+    }, title), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[12.5px] text-muted"
+    }, sub)), /* @__PURE__ */ React.createElement(Seg, {
+      label: "Tampilan",
+      value: table ? "t" : "g",
+      onChange: (v) => setTable(v === "t"),
+      options: [{ value: "g", label: "Grafik" }, { value: "t", label: "Tabel" }]
+    })), table ? /* @__PURE__ */ React.createElement("div", {
+      className: "overflow-x-auto max-h-[240px] overflow-y-auto"
+    }, /* @__PURE__ */ React.createElement("table", {
+      className: "w-full text-[13.5px]"
+    }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", {
+      className: "text-left text-muted text-[12px] uppercase tracking-wide"
+    }, /* @__PURE__ */ React.createElement("th", {
+      className: "py-1.5 font-semibold"
+    }, xKey === "label" ? "Tanggal" : "Nama"), /* @__PURE__ */ React.createElement("th", {
+      className: "py-1.5 font-semibold text-right"
+    }, "Terverifikasi"))), /* @__PURE__ */ React.createElement("tbody", null, data.map((d, i) => /* @__PURE__ */ React.createElement("tr", {
+      key: i,
+      className: "border-t border-line"
+    }, /* @__PURE__ */ React.createElement("td", {
+      className: "py-1.5"
+    }, d[xKey]), /* @__PURE__ */ React.createElement("td", {
+      className: "py-1.5 text-right num"
+    }, rupiah(d.total))))))) : children);
+  }
+  function Dashboard() {
+    const { db } = useApp();
+    const { visits, donations } = useDerived();
+    const [period, setPeriod] = useState(30);
+    const R = window.Recharts;
+    const from = startOfDay(Date.now() - (period - 1) * 86400000);
+    const dons = donations.filter((d) => new Date(d.created_at).getTime() >= from);
+    const vis = visits.filter((v) => new Date(v.visit_date).getTime() >= from);
+    const verified = dons.filter((d) => d.verification_status === "Verified");
+    const pending = dons.filter((d) => d.verification_status === "Pending");
+    const total = sum(verified, (d) => d.amount);
+    const won = vis.filter((v) => v.status === "Berhasil").length;
+    const trend = useMemo(() => {
+      const map = {};
+      const out = [];
+      for (let i = 0;i < period; i++) {
+        const d = new Date(from + i * 86400000);
+        const row = { key: isoDay(d), label: fmtShort(d), total: 0 };
+        map[row.key] = row;
+        out.push(row);
+      }
+      verified.forEach((d) => {
+        const r = map[isoDay(d.created_at)];
+        if (r)
+          r.total += d.amount;
+      });
+      return out;
+    }, [period, donations]);
+    const byCat = useMemo(() => {
+      const m = {};
+      verified.forEach((d) => {
+        const n = d.category ? d.category.name : "Tanpa kategori";
+        m[n] = (m[n] || 0) + d.amount;
+      });
+      return Object.entries(m).map(([name, t]) => ({ name, total: t })).sort((a, b) => b.total - a.total).slice(0, 6);
+    }, [period, donations]);
+    const byMethod = useMemo(() => METHODS.map((m) => ({ name: METHOD_SHORT[m], total: sum(verified.filter((d) => d.payment_method === m), (d) => d.amount) })), [period, donations]);
+    const board = db.profiles.filter((p) => p.role === "volunteer").map((p) => ({ p, total: sum(verified.filter((d) => d.volunteer_id === p.id), (d) => d.amount), n: verified.filter((d) => d.volunteer_id === p.id).length })).sort((a, b) => b.total - a.total);
+    const maxB = Math.max(1, ...board.map((b) => b.total));
+    const tickStyle = { fill: "var(--muted)", fontSize: 11 };
+    return /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-4"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center justify-between gap-3 flex-wrap"
+    }, /* @__PURE__ */ React.createElement("p", {
+      className: "text-[13.5px] text-muted"
+    }, "Total dana hanya bertambah setelah donasi berstatus Verified."), /* @__PURE__ */ React.createElement(Seg, {
+      label: "Periode",
+      value: period,
+      onChange: setPeriod,
+      options: [{ value: 7, label: "7 hari" }, { value: 14, label: "14 hari" }, { value: 30, label: "30 hari" }]
+    })), /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-3 lg:grid-cols-[1.4fr_1fr_1fr_1fr]"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "hero-grad rounded-2xl p-5 text-white col-span-full lg:col-span-1"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center gap-2 text-[13px] font-semibold opacity-95"
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Wallet",
+      size: 16
+    }), "Dana terverifikasi"), /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[30px] leading-tight mt-2 num break-words"
+    }, rupiah(total)), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[13px] opacity-90 mt-1"
+    }, verified.length, " donasi · ", period, " hari terakhir")), /* @__PURE__ */ React.createElement("div", {
+      className: "grid grid-cols-3 gap-3 col-span-full lg:col-span-3"
+    }, /* @__PURE__ */ React.createElement(Metric, {
+      label: "Menunggu verifikasi",
+      value: pending.length,
+      sub: rupiah(sum(pending, (d) => d.amount)),
+      icon: "Clock"
+    }), /* @__PURE__ */ React.createElement(Metric, {
+      label: "Kunjungan",
+      value: vis.length,
+      sub: vis.length ? Math.round(won / vis.length * 100) + "% berhasil" : "-",
+      icon: "MapPin"
+    }), /* @__PURE__ */ React.createElement(Metric, {
+      label: "Donatur",
+      value: db.donors.length,
+      sub: "terdaftar",
+      icon: "Users"
+    }))), /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-4 lg:grid-cols-2"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "lg:col-span-2"
+    }, /* @__PURE__ */ React.createElement(ChartCard, {
+      title: "Tren harian",
+      sub: "Dana terverifikasi per hari",
+      data: trend,
+      xKey: "label"
+    }, R ? /* @__PURE__ */ React.createElement("div", {
+      style: { width: "100%", height: 240 }
+    }, /* @__PURE__ */ React.createElement(R.ResponsiveContainer, {
+      width: "100%",
+      height: "100%"
+    }, /* @__PURE__ */ React.createElement(R.AreaChart, {
+      data: trend,
+      margin: { top: 8, right: 8, left: 0, bottom: 0 }
+    }, /* @__PURE__ */ React.createElement("defs", null, /* @__PURE__ */ React.createElement("linearGradient", {
+      id: "trendFill",
+      x1: "0",
+      y1: "0",
+      x2: "0",
+      y2: "1"
+    }, /* @__PURE__ */ React.createElement("stop", {
+      offset: "0%",
+      stopColor: "var(--c1)",
+      stopOpacity: "0.28"
+    }), /* @__PURE__ */ React.createElement("stop", {
+      offset: "100%",
+      stopColor: "var(--c1)",
+      stopOpacity: "0"
+    }))), /* @__PURE__ */ React.createElement(R.CartesianGrid, {
+      stroke: "var(--grid)",
+      vertical: false
+    }), /* @__PURE__ */ React.createElement(R.XAxis, {
+      dataKey: "label",
+      tick: tickStyle,
+      axisLine: { stroke: "var(--axis)" },
+      tickLine: false,
+      minTickGap: 22
+    }), /* @__PURE__ */ React.createElement(R.YAxis, {
+      tick: tickStyle,
+      axisLine: false,
+      tickLine: false,
+      width: 44,
+      tickFormatter: shortRp
+    }), /* @__PURE__ */ React.createElement(R.Tooltip, {
+      content: /* @__PURE__ */ React.createElement(ChartTip, null),
+      cursor: { stroke: "var(--axis)" }
+    }), /* @__PURE__ */ React.createElement(R.Area, {
+      type: "monotone",
+      dataKey: "total",
+      stroke: "var(--c1)",
+      strokeWidth: 2,
+      fill: "url(#trendFill)",
+      dot: false,
+      activeDot: { r: 5, fill: "var(--c1)", stroke: "var(--surface)", strokeWidth: 2 }
+    })))) : /* @__PURE__ */ React.createElement(SimpleBars, {
+      data: trend.slice(-10),
+      xKey: "label"
+    }))), /* @__PURE__ */ React.createElement(ChartCard, {
+      title: "Per kategori",
+      sub: "Dana terverifikasi",
+      data: byCat,
+      xKey: "name"
+    }, !byCat.length ? /* @__PURE__ */ React.createElement("p", {
+      className: "text-muted text-[14px] py-8 text-center"
+    }, "Belum ada donasi terverifikasi pada periode ini.") : R ? /* @__PURE__ */ React.createElement("div", {
+      style: { width: "100%", height: Math.max(180, byCat.length * 40 + 24) }
+    }, /* @__PURE__ */ React.createElement(R.ResponsiveContainer, {
+      width: "100%",
+      height: "100%"
+    }, /* @__PURE__ */ React.createElement(R.BarChart, {
+      data: byCat,
+      layout: "vertical",
+      margin: { top: 4, right: 12, left: 4, bottom: 0 }
+    }, /* @__PURE__ */ React.createElement(R.CartesianGrid, {
+      stroke: "var(--grid)",
+      horizontal: false
+    }), /* @__PURE__ */ React.createElement(R.XAxis, {
+      type: "number",
+      tick: tickStyle,
+      axisLine: false,
+      tickLine: false,
+      tickFormatter: shortRp
+    }), /* @__PURE__ */ React.createElement(R.YAxis, {
+      type: "category",
+      dataKey: "name",
+      width: 108,
+      tick: tickStyle,
+      axisLine: { stroke: "var(--axis)" },
+      tickLine: false
+    }), /* @__PURE__ */ React.createElement(R.Tooltip, {
+      content: /* @__PURE__ */ React.createElement(ChartTip, null),
+      cursor: { fill: "var(--surface-2)" }
+    }), /* @__PURE__ */ React.createElement(R.Bar, {
+      dataKey: "total",
+      fill: "var(--c1)",
+      radius: [0, 4, 4, 0],
+      barSize: 16
+    })))) : /* @__PURE__ */ React.createElement(SimpleBars, {
+      data: byCat,
+      xKey: "name"
+    })), /* @__PURE__ */ React.createElement(ChartCard, {
+      title: "Metode pembayaran",
+      sub: "Dana terverifikasi",
+      data: byMethod,
+      xKey: "name"
+    }, R ? /* @__PURE__ */ React.createElement("div", {
+      style: { width: "100%", height: 230 }
+    }, /* @__PURE__ */ React.createElement(R.ResponsiveContainer, {
+      width: "100%",
+      height: "100%"
+    }, /* @__PURE__ */ React.createElement(R.BarChart, {
+      data: byMethod,
+      margin: { top: 8, right: 8, left: 0, bottom: 0 }
+    }, /* @__PURE__ */ React.createElement(R.CartesianGrid, {
+      stroke: "var(--grid)",
+      vertical: false
+    }), /* @__PURE__ */ React.createElement(R.XAxis, {
+      dataKey: "name",
+      tick: tickStyle,
+      axisLine: { stroke: "var(--axis)" },
+      tickLine: false
+    }), /* @__PURE__ */ React.createElement(R.YAxis, {
+      tick: tickStyle,
+      axisLine: false,
+      tickLine: false,
+      width: 44,
+      tickFormatter: shortRp
+    }), /* @__PURE__ */ React.createElement(R.Tooltip, {
+      content: /* @__PURE__ */ React.createElement(ChartTip, null),
+      cursor: { fill: "var(--surface-2)" }
+    }), /* @__PURE__ */ React.createElement(R.Bar, {
+      dataKey: "total",
+      fill: "var(--c1)",
+      radius: [4, 4, 0, 0],
+      maxBarSize: 44
+    })))) : /* @__PURE__ */ React.createElement(SimpleBars, {
+      data: byMethod,
+      xKey: "name"
+    }))), /* @__PURE__ */ React.createElement("div", {
+      className: CARD + " p-4"
+    }, /* @__PURE__ */ React.createElement("h3", {
+      className: "font-display font-bold text-[17px] mb-3"
+    }, "Peringkat relawan"), /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-3"
+    }, board.map((b, i) => /* @__PURE__ */ React.createElement("div", {
+      key: b.p.id
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-baseline justify-between gap-2 text-[14px]"
+    }, /* @__PURE__ */ React.createElement("span", {
+      className: "font-semibold truncate"
+    }, i + 1, ". ", b.p.full_name), /* @__PURE__ */ React.createElement("span", {
+      className: "num text-ink-2 whitespace-nowrap"
+    }, rupiah(b.total), " · ", b.n, " donasi")), /* @__PURE__ */ React.createElement("div", {
+      className: "h-2 rounded-full bg-surface-2 mt-1.5 overflow-hidden"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "h-full rounded-full",
+      style: { width: b.total / maxB * 100 + "%", background: "var(--c1)" }
+    })))))));
+  }
+  function Verify() {
+    const { actions, me, notify, openProof, openReceipt } = useApp();
+    const { donations } = useDerived();
+    const [f, setF] = useState("Pending");
+    const counts = { Pending: 0, Verified: 0, Rejected: 0 };
+    donations.forEach((d) => {
+      counts[d.verification_status]++;
+    });
+    const shown = donations.filter((d) => d.verification_status === f);
+    const set = async (d, s) => {
+      const ok = await actions.update("donations", d.id, { verification_status: s, verified_at: s === "Pending" ? null : new Date().toISOString(), verified_by: s === "Pending" ? null : me.id });
+      if (ok)
+        notify(s === "Verified" ? "Donasi disetujui, total dana bertambah" : s === "Rejected" ? "Donasi ditolak" : "Dikembalikan ke status Pending", s === "Rejected" ? "bad" : "ok");
+    };
+    return /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-4"
+    }, /* @__PURE__ */ React.createElement(Seg, {
+      label: "Status",
+      value: f,
+      onChange: setF,
+      options: ["Pending", "Verified", "Rejected"].map((s) => ({ value: s, label: s + " " + counts[s] }))
+    }), /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-3 md:grid-cols-2"
+    }, shown.map((d) => /* @__PURE__ */ React.createElement("div", {
+      key: d.id,
+      className: CARD + " p-4"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-start justify-between gap-3"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "min-w-0"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[22px] num"
+    }, rupiah(d.amount)), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[13px] text-muted"
+    }, receiptNo(d))), /* @__PURE__ */ React.createElement(Badge, {
+      status: d.verification_status
+    })), /* @__PURE__ */ React.createElement("dl", {
+      className: "grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[13.5px] mt-3"
+    }, /* @__PURE__ */ React.createElement("dt", {
+      className: "text-muted"
+    }, "Donatur"), /* @__PURE__ */ React.createElement("dd", {
+      className: "font-semibold break-words"
+    }, d.donor ? d.donor.name : "-"), /* @__PURE__ */ React.createElement("dt", {
+      className: "text-muted"
+    }, "Relawan"), /* @__PURE__ */ React.createElement("dd", {
+      className: "break-words"
+    }, d.volunteer ? d.volunteer.full_name : "-"), /* @__PURE__ */ React.createElement("dt", {
+      className: "text-muted"
+    }, "Kategori"), /* @__PURE__ */ React.createElement("dd", null, d.category ? d.category.name : "-"), /* @__PURE__ */ React.createElement("dt", {
+      className: "text-muted"
+    }, "Metode"), /* @__PURE__ */ React.createElement("dd", null, d.payment_method), /* @__PURE__ */ React.createElement("dt", {
+      className: "text-muted"
+    }, "Dilaporkan"), /* @__PURE__ */ React.createElement("dd", null, fmtDT(d.created_at))), /* @__PURE__ */ React.createElement("div", {
+      className: "flex flex-wrap gap-2 mt-4"
+    }, d.proof_url ? /* @__PURE__ */ React.createElement("button", {
+      className: SMALL + " bg-surface-2 text-ink border border-line",
+      onClick: () => openProof(d.id)
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Image",
+      size: 14
+    }), "Lihat bukti") : /* @__PURE__ */ React.createElement("span", {
+      className: "text-[12.5px] text-muted self-center"
+    }, "Tunai, tanpa bukti"), /* @__PURE__ */ React.createElement("button", {
+      className: SMALL + " bg-surface-2 text-ink border border-line",
+      onClick: () => openReceipt(d.id)
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Receipt",
+      size: 14
+    }), "Kuitansi")), /* @__PURE__ */ React.createElement("div", {
+      className: "flex gap-2 mt-3"
+    }, d.verification_status === "Pending" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", {
+      className: BTN + " flex-1 bg-emerald-600 hover:bg-emerald-700 text-white",
+      onClick: () => set(d, "Verified")
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Check",
+      size: 18
+    }), "Approve"), /* @__PURE__ */ React.createElement("button", {
+      className: BTN + " flex-1 bg-rose-600 hover:bg-rose-700 text-white",
+      onClick: () => set(d, "Rejected")
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "X",
+      size: 18
+    }), "Reject")) : /* @__PURE__ */ React.createElement("button", {
+      className: GHOST + " flex-1",
+      onClick: () => set(d, "Pending")
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Undo2",
+      size: 16
+    }), "Kembalikan ke Pending"))))), !shown.length ? /* @__PURE__ */ React.createElement(Empty, {
+      icon: "ShieldCheck",
+      title: f === "Pending" ? "Semua donasi sudah diperiksa" : "Belum ada data",
+      text: f === "Pending" ? "Donasi baru dari relawan akan muncul di sini." : "Tidak ada donasi dengan status " + f + "."
+    }) : null);
+  }
+  function CategoryRow({ c }) {
+    const { actions, notify } = useApp();
+    const [edit, setEdit] = useState(false);
+    const [name, setName] = useState(c.name);
+    const [conf, setConf] = useState(false);
+    return /* @__PURE__ */ React.createElement("li", {
+      className: "flex items-center gap-2 py-2.5 border-t border-line first:border-0 flex-wrap"
+    }, edit ? /* @__PURE__ */ React.createElement("input", {
+      className: INPUT + " flex-1 min-w-[140px]",
+      value: name,
+      autoFocus: true,
+      "aria-label": "Nama kategori",
+      onChange: (e) => setName(e.target.value)
+    }) : /* @__PURE__ */ React.createElement("span", {
+      className: "flex-1 min-w-[120px] font-semibold " + (c.is_active ? "" : "text-muted line-through")
+    }, c.name), edit ? /* @__PURE__ */ React.createElement("button", {
+      className: SMALL + " bg-pink-600 hover:bg-pink-700 text-white",
+      onClick: async () => {
+        if (!name.trim())
+          return;
+        if (await actions.update("donation_categories", c.id, { name: name.trim() })) {
+          setEdit(false);
+          notify("Kategori diperbarui");
+        }
+      }
+    }, "Simpan") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", {
+      className: SMALL + " " + (c.is_active ? TONE_CLASS.ok : TONE_CLASS.warn),
+      onClick: () => actions.update("donation_categories", c.id, { is_active: !c.is_active }),
+      "aria-pressed": c.is_active
+    }, c.is_active ? "Aktif" : "Nonaktif"), /* @__PURE__ */ React.createElement("button", {
+      className: SMALL + " bg-surface-2 text-ink border border-line",
+      onClick: () => setEdit(true),
+      "aria-label": "Ubah " + c.name
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Pencil",
+      size: 14
+    })), conf ? /* @__PURE__ */ React.createElement("button", {
+      className: SMALL + " bg-rose-600 text-white",
+      onClick: async () => {
+        if (await actions.remove("donation_categories", c.id))
+          notify("Kategori dihapus");
+      }
+    }, "Yakin hapus?") : /* @__PURE__ */ React.createElement("button", {
+      className: SMALL + " bg-surface-2 text-badfg border border-line",
+      onClick: () => {
+        setConf(true);
+        setTimeout(() => setConf(false), 3500);
+      },
+      "aria-label": "Hapus " + c.name
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Trash2",
+      size: 14
+    }))));
+  }
+  function MasterData() {
+    const { db, actions, notify, me, openInstall } = useApp();
+    const st = db.settings;
+    const [org, setOrg] = useState(st.org_name);
+    const [foot, setFoot] = useState(st.receipt_footer_text || "");
+    const [newCat, setNewCat] = useState("");
+    const [bank, setBank] = useState({ bank: "", number: "", holder: "" });
+    const [busy, setBusy] = useState(false);
+    useEffect(() => {
+      setOrg(st.org_name);
+      setFoot(st.receipt_footer_text || "");
+    }, [st.org_name, st.receipt_footer_text]);
+    const logo = st.org_logo_url || LOGO;
+    async function onLogo(e) {
+      const f = e.target.files && e.target.files[0];
+      if (!f)
+        return;
+      setBusy(true);
+      try {
+        const blob = dataUrlToBlob(await imageToDataUrl(f, 500, "png"));
+        const path = "logo-" + Date.now() + ".png";
+        const up = await sb.storage.from("branding").upload(path, blob, { contentType: "image/png" });
+        if (up.error)
+          throw up.error;
+        const url = sb.storage.from("branding").getPublicUrl(path).data.publicUrl;
+        if (await actions.saveSettings({ org_logo_url: url }))
+          notify("Logo diperbarui");
+      } catch (x) {
+        notify("Gagal mengunggah logo: " + friendlyError(x), "bad");
+      }
+      setBusy(false);
+    }
+    async function saveOrg() {
+      if (await actions.saveSettings({ org_name: org.trim() || "Rumah Pelopor Indonesia", receipt_footer_text: foot }))
+        notify("Profil lembaga disimpan");
+    }
+    async function addCat(e) {
+      e.preventDefault();
+      if (!newCat.trim())
+        return;
+      if (await actions.add("donation_categories", { id: uid(), name: newCat.trim(), is_active: true })) {
+        setNewCat("");
+        notify("Kategori ditambahkan");
+      }
+    }
+    async function addBank(e) {
+      e.preventDefault();
+      if (!bank.bank.trim() || !bank.number.trim())
+        return notify("Isi nama bank dan nomor rekening", "bad");
+      if (await actions.saveSettings({ bank_accounts: [...st.bank_accounts, { bank: bank.bank.trim(), number: bank.number.trim(), holder: bank.holder.trim() || org }] })) {
+        setBank({ bank: "", number: "", holder: "" });
+        notify("Rekening ditambahkan");
+      }
+    }
+    async function setRole(p, role) {
+      if (await actions.update("profiles", p.id, { role }))
+        notify(p.full_name + " sekarang " + ROLE_LABEL[role]);
+    }
+    return /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-4 lg:grid-cols-2 items-start"
+    }, /* @__PURE__ */ React.createElement("section", {
+      className: CARD + " p-4 grid gap-4"
+    }, /* @__PURE__ */ React.createElement("h2", {
+      className: "font-display font-bold text-[18px]"
+    }, "Profil lembaga"), /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center gap-4"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "w-24 h-20 rounded-xl bg-white border border-line flex items-center justify-center p-1.5 shrink-0"
+    }, /* @__PURE__ */ React.createElement("img", {
+      src: logo,
+      alt: "Logo lembaga",
+      className: "max-h-full max-w-full object-contain"
+    })), /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-2"
+    }, /* @__PURE__ */ React.createElement("label", {
+      htmlFor: "logo-up",
+      className: SMALL + " bg-surface-2 text-ink border border-line cursor-pointer"
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Upload",
+      size: 14
+    }), busy ? "Mengunggah…" : "Ganti logo"), /* @__PURE__ */ React.createElement("input", {
+      id: "logo-up",
+      type: "file",
+      accept: "image/*",
+      className: "sr-only",
+      onChange: onLogo,
+      disabled: busy
+    }), st.org_logo_url ? /* @__PURE__ */ React.createElement("button", {
+      className: "text-[13px] font-semibold text-badfg text-left min-h-[28px]",
+      onClick: () => actions.saveSettings({ org_logo_url: null })
+    }, "Pakai logo RPI") : null)), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", {
+      className: LABEL,
+      htmlFor: "org-name"
+    }, "Nama lembaga"), /* @__PURE__ */ React.createElement("input", {
+      id: "org-name",
+      className: INPUT,
+      value: org,
+      onChange: (e) => setOrg(e.target.value)
+    })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", {
+      className: LABEL,
+      htmlFor: "org-foot"
+    }, "Teks penutup kuitansi"), /* @__PURE__ */ React.createElement("textarea", {
+      id: "org-foot",
+      className: INPUT + " py-2.5 min-h-[88px]",
+      value: foot,
+      onChange: (e) => setFoot(e.target.value)
+    })), /* @__PURE__ */ React.createElement("button", {
+      className: CTA,
+      onClick: saveOrg
+    }, "Simpan perubahan")), /* @__PURE__ */ React.createElement("section", {
+      className: CARD + " p-4"
+    }, /* @__PURE__ */ React.createElement("h2", {
+      className: "font-display font-bold text-[18px] mb-2"
+    }, "Kategori donasi"), /* @__PURE__ */ React.createElement("ul", null, db.donation_categories.map((c) => /* @__PURE__ */ React.createElement(CategoryRow, {
+      key: c.id,
+      c
+    }))), /* @__PURE__ */ React.createElement("form", {
+      className: "flex gap-2 mt-3",
+      onSubmit: addCat
+    }, /* @__PURE__ */ React.createElement("input", {
+      id: "new-cat",
+      className: INPUT,
+      placeholder: "Kategori baru",
+      "aria-label": "Kategori baru",
+      value: newCat,
+      onChange: (e) => setNewCat(e.target.value)
+    }), /* @__PURE__ */ React.createElement("button", {
+      type: "submit",
+      className: CTA + " shrink-0"
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Plus",
+      size: 18
+    }), "Tambah"))), /* @__PURE__ */ React.createElement("section", {
+      className: CARD + " p-4 lg:col-span-2"
+    }, /* @__PURE__ */ React.createElement("h2", {
+      className: "font-display font-bold text-[18px] mb-2"
+    }, "Rekening bank"), !st.bank_accounts.length ? /* @__PURE__ */ React.createElement("p", {
+      className: "text-[14px] text-muted mb-2"
+    }, "Belum ada rekening. Tambahkan rekening resmi RPI di bawah.") : null, /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-2 sm:grid-cols-2 lg:grid-cols-3"
+    }, st.bank_accounts.map((b, i) => /* @__PURE__ */ React.createElement("div", {
+      key: i,
+      className: "rounded-xl border border-line bg-surface-2 p-3 flex items-start justify-between gap-2"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "min-w-0"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[16px]"
+    }, b.bank), /* @__PURE__ */ React.createElement("div", {
+      className: "num text-[14px] break-all"
+    }, b.number), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[12.5px] text-muted break-words"
+    }, b.holder)), /* @__PURE__ */ React.createElement("button", {
+      className: SMALL + " bg-surface text-badfg border border-line shrink-0",
+      "aria-label": "Hapus rekening " + b.bank,
+      onClick: async () => {
+        if (await actions.saveSettings({ bank_accounts: st.bank_accounts.filter((_, j) => j !== i) }))
+          notify("Rekening dihapus");
+      }
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Trash2",
+      size: 14
+    }))))), /* @__PURE__ */ React.createElement("form", {
+      className: "grid gap-2 sm:grid-cols-[1fr_1.2fr_1.4fr_auto] mt-3",
+      onSubmit: addBank
+    }, /* @__PURE__ */ React.createElement("input", {
+      id: "bk-name",
+      className: INPUT,
+      placeholder: "Bank",
+      "aria-label": "Nama bank",
+      value: bank.bank,
+      onChange: (e) => setBank({ ...bank, bank: e.target.value })
+    }), /* @__PURE__ */ React.createElement("input", {
+      id: "bk-num",
+      className: INPUT,
+      inputMode: "numeric",
+      placeholder: "Nomor rekening",
+      "aria-label": "Nomor rekening",
+      value: bank.number,
+      onChange: (e) => setBank({ ...bank, number: e.target.value })
+    }), /* @__PURE__ */ React.createElement("input", {
+      id: "bk-hold",
+      className: INPUT,
+      placeholder: "Atas nama",
+      "aria-label": "Atas nama",
+      value: bank.holder,
+      onChange: (e) => setBank({ ...bank, holder: e.target.value })
+    }), /* @__PURE__ */ React.createElement("button", {
+      type: "submit",
+      className: CTA
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Plus",
+      size: 18
+    }), "Tambah"))), /* @__PURE__ */ React.createElement("section", {
+      className: CARD + " p-4 lg:col-span-2"
+    }, /* @__PURE__ */ React.createElement("h2", {
+      className: "font-display font-bold text-[18px]"
+    }, "Pengguna & peran"), /* @__PURE__ */ React.createElement("p", {
+      className: "text-[13.5px] text-muted mb-3"
+    }, "Orang yang mendaftar otomatis menjadi Relawan. Naikkan menjadi Koordinator atau Owner di sini."), /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-2"
+    }, db.profiles.map((p) => /* @__PURE__ */ React.createElement("div", {
+      key: p.id,
+      className: "rounded-xl border border-line bg-surface-2 p-3 flex items-center gap-3 flex-wrap"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "min-w-0 flex-1 basis-48"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "font-semibold truncate"
+    }, p.full_name || "(tanpa nama)", p.id === me.id ? " (Anda)" : ""), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[12.5px] text-muted truncate"
+    }, p.email || "-", p.phone ? " · " + p.phone : "")), /* @__PURE__ */ React.createElement("select", {
+      "aria-label": "Peran " + p.full_name,
+      className: INPUT + " max-w-[190px]",
+      value: p.role,
+      disabled: p.id === me.id,
+      onChange: (e) => setRole(p, e.target.value)
+    }, Object.keys(ROLE_LABEL).map((r) => /* @__PURE__ */ React.createElement("option", {
+      key: r,
+      value: r
+    }, ROLE_LABEL[r]))))))), /* @__PURE__ */ React.createElement("section", {
+      className: CARD + " p-4 lg:col-span-2 flex items-center justify-between gap-3 flex-wrap"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "min-w-0"
+    }, /* @__PURE__ */ React.createElement("h2", {
+      className: "font-display font-bold text-[18px]"
+    }, "Aplikasi di HP"), /* @__PURE__ */ React.createElement("p", {
+      className: "text-[13.5px] text-muted"
+    }, "Panduan memasang RPI ke layar utama untuk relawan.")), /* @__PURE__ */ React.createElement("button", {
+      className: GHOST,
+      onClick: openInstall
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Smartphone",
+      size: 16
+    }), "Lihat panduan pasang")));
+  }
+  function ExportView() {
+    const { db } = useApp();
+    const { visits, donations } = useDerived();
+    const [ds, setDs] = useState("donations");
+    const [fmt, setFmt] = useState("csv");
+    const taRef = useRef(null);
+    const { head, rows } = useMemo(() => {
+      if (ds === "donations")
+        return { head: ["No Kuitansi", "Tanggal", "Relawan", "Donatur", "WhatsApp", "Kategori", "Metode", "Nominal", "Status Verifikasi", "Tanggal Verifikasi"], rows: donations.map((d) => [receiptNo(d), isoDay(d.created_at), d.volunteer ? d.volunteer.full_name : "", d.donor ? d.donor.name : "", d.donor ? d.donor.whatsapp : "", d.category ? d.category.name : "", d.payment_method, d.amount, d.verification_status, d.verified_at ? isoDay(d.verified_at) : ""]) };
+      if (ds === "visits")
+        return { head: ["Tanggal", "Jam", "Relawan", "Donatur", "Status", "Catatan"], rows: visits.map((v) => [isoDay(v.visit_date), fmtTime(v.visit_date), v.volunteer ? v.volunteer.full_name : "", v.donor ? v.donor.name : "", v.status, v.notes || ""]) };
+      return { head: ["Nama", "WhatsApp", "Alamat"], rows: db.donors.map((d) => [d.name, d.whatsapp || "", d.address || ""]) };
+    }, [ds, donations, visits, db.donors]);
+    const sep = fmt === "csv" ? "," : "\t";
+    const esc = (x) => {
+      const s = String(x == null ? "" : x);
+      return fmt === "csv" ? /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s : s.replace(/[\t\n]/g, " ");
+    };
+    const text = [head, ...rows].map((r) => r.map(esc).join(sep)).join(`
+`);
+    const download = () => {
+      const blob = new Blob(["\uFEFF" + text], { type: "text/" + (fmt === "csv" ? "csv" : "tab-separated-values") + ";charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "rpi-" + ds + "-" + isoDay(Date.now()) + "." + fmt;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    };
+    return /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-4"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex flex-wrap gap-3 items-center justify-between"
+    }, /* @__PURE__ */ React.createElement(Seg, {
+      label: "Data",
+      value: ds,
+      onChange: setDs,
+      options: [{ value: "donations", label: "Donasi" }, { value: "visits", label: "Kunjungan" }, { value: "donors", label: "Donatur" }]
+    }), /* @__PURE__ */ React.createElement(Seg, {
+      label: "Format",
+      value: fmt,
+      onChange: setFmt,
+      options: [{ value: "csv", label: "CSV" }, { value: "tsv", label: "Excel (tempel)" }]
+    })), /* @__PURE__ */ React.createElement("div", {
+      className: CARD + " p-4 grid gap-3"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center justify-between gap-3 flex-wrap"
+    }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[17px]"
+    }, rows.length, " baris siap diekspor"), /* @__PURE__ */ React.createElement("p", {
+      className: "text-[13px] text-muted max-w-xl"
+    }, "Unduh sebagai file, atau salin lalu tempel ke Excel dan Google Sheets. File CSV terbuka langsung di Excel.")), /* @__PURE__ */ React.createElement("div", {
+      className: "flex gap-2 flex-wrap"
+    }, /* @__PURE__ */ React.createElement("button", {
+      className: CTA,
+      onClick: download
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Download",
+      size: 18
+    }), "Unduh ", fmt === "csv" ? ".csv" : ".tsv"), /* @__PURE__ */ React.createElement(CopyButton, {
+      text,
+      label: "Salin",
+      className: GHOST
+    }))), /* @__PURE__ */ React.createElement("div", {
+      className: "overflow-x-auto rounded-xl border border-line"
+    }, /* @__PURE__ */ React.createElement("table", {
+      className: "w-full text-[13px] min-w-[560px]"
+    }, /* @__PURE__ */ React.createElement("thead", null, /* @__PURE__ */ React.createElement("tr", {
+      className: "bg-surface-2 text-left text-muted text-[12px] uppercase tracking-wide"
+    }, head.map((h) => /* @__PURE__ */ React.createElement("th", {
+      key: h,
+      className: "p-2.5 font-semibold whitespace-nowrap"
+    }, h)))), /* @__PURE__ */ React.createElement("tbody", null, rows.slice(0, 6).map((r, i) => /* @__PURE__ */ React.createElement("tr", {
+      key: i,
+      className: "border-t border-line"
+    }, r.map((c, j) => /* @__PURE__ */ React.createElement("td", {
+      key: j,
+      className: "p-2.5 whitespace-nowrap num"
+    }, c))))))), /* @__PURE__ */ React.createElement("label", {
+      className: LABEL,
+      htmlFor: "exp-text"
+    }, "Isi ", fmt === "csv" ? "CSV" : "TSV"), /* @__PURE__ */ React.createElement("textarea", {
+      id: "exp-text",
+      ref: taRef,
+      readOnly: true,
+      className: INPUT + " py-2.5 font-mono text-[12px] min-h-[160px] whitespace-pre",
+      value: text,
+      onFocus: (e) => e.target.select()
+    })));
+  }
+  function ReceiptModal({ id, onClose }) {
+    const { db, notify } = useApp();
+    const { donations } = useDerived();
+    const d = donations.find((x) => x.id === id);
+    if (!d)
+      return null;
+    const st = db.settings;
+    const logo = st.org_logo_url || LOGO;
+    const verified = d.verification_status === "Verified";
+    const text = ["*KUITANSI DONASI*", st.org_name, "No: " + receiptNo(d), "Tanggal: " + fmtDT(d.created_at), "Diterima dari: " + (d.donor ? d.donor.name : "-"), "Nominal: " + rupiah(d.amount), "Terbilang: " + terbilang(d.amount), "Kategori: " + (d.category ? d.category.name : "-"), "Metode: " + d.payment_method, "Relawan: " + (d.volunteer ? d.volunteer.full_name + (d.volunteer.phone ? " (" + d.volunteer.phone + ")" : "") : "-"), "Status: " + (verified ? "Terverifikasi" : "Menunggu verifikasi"), "", st.receipt_footer_text || ""].join(`
+`);
+    const wa = d.donor && d.donor.whatsapp ? "https://wa.me/" + waNumber(d.donor.whatsapp) + "?text=" + encodeURIComponent(text) : null;
+    const row = (k, v) => /* @__PURE__ */ React.createElement("div", {
+      className: "grid grid-cols-[104px_1fr] gap-2 py-1.5 text-[13.5px]",
+      style: { borderTop: "1px dashed var(--paper-line)" }
+    }, /* @__PURE__ */ React.createElement("dt", {
+      style: { opacity: 0.65 }
+    }, k), /* @__PURE__ */ React.createElement("dd", {
+      className: "font-semibold break-words"
+    }, v));
+    return /* @__PURE__ */ React.createElement(Sheet, {
+      title: "Kuitansi digital",
+      onClose
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "rounded-2xl p-5",
+      style: { background: "var(--paper)", color: "var(--paper-ink)", border: "1px solid var(--paper-line)" }
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center gap-3 pb-3",
+      style: { borderBottom: "2px solid var(--paper-ink)" }
+    }, /* @__PURE__ */ React.createElement("img", {
+      src: logo,
+      alt: "Logo",
+      className: "h-14 w-auto max-w-[110px] object-contain"
+    }), /* @__PURE__ */ React.createElement("div", {
+      className: "min-w-0"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[16px] leading-tight"
+    }, st.org_name), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[12px]",
+      style: { opacity: 0.65 }
+    }, "Kuitansi penerimaan donasi"))), /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center justify-between gap-2 mt-3 flex-wrap"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "num text-[13px] font-bold"
+    }, receiptNo(d)), /* @__PURE__ */ React.createElement("span", {
+      className: "text-[11.5px] font-bold uppercase tracking-wider px-2 py-1 rounded",
+      style: verified ? { background: "#d1fae5", color: "#065f46" } : { background: "#fef3c7", color: "#92400e" }
+    }, verified ? "Terverifikasi" : "Menunggu verifikasi")), /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[30px] mt-2 num break-words"
+    }, rupiah(d.amount)), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[13px] italic mb-2",
+      style: { opacity: 0.75 }
+    }, terbilang(d.amount)), /* @__PURE__ */ React.createElement("dl", null, row("Diterima dari", d.donor ? d.donor.name : "-"), row("Tanggal", fmtDT(d.created_at)), row("Kategori", d.category ? d.category.name : "-"), row("Metode", d.payment_method), row("Relawan", d.volunteer ? d.volunteer.full_name : "-"), d.volunteer && d.volunteer.phone ? row("Kontak relawan", d.volunteer.phone) : null), st.receipt_footer_text ? /* @__PURE__ */ React.createElement("p", {
+      className: "text-[12.5px] mt-3 pt-3",
+      style: { borderTop: "1px dashed var(--paper-line)", opacity: 0.8 }
+    }, st.receipt_footer_text) : null), /* @__PURE__ */ React.createElement("div", {
+      className: "grid gap-2 mt-4 sm:grid-cols-3"
+    }, /* @__PURE__ */ React.createElement("button", {
+      className: GHOST,
+      onClick: () => {
+        if (!printReceipt({ d, st, logo }))
+          notify("Izinkan pop-up untuk mencetak kuitansi", "bad");
+      }
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Printer",
+      size: 16
+    }), "Cetak / PDF"), /* @__PURE__ */ React.createElement(CopyButton, {
+      text,
+      label: "Salin teks",
+      className: GHOST
+    }), wa ? /* @__PURE__ */ React.createElement("a", {
+      href: wa,
+      target: "_blank",
+      rel: "noopener noreferrer",
+      className: CTA
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "MessageCircle",
+      size: 18
+    }), "Kirim via WhatsApp") : /* @__PURE__ */ React.createElement("span", {
+      className: "text-[13px] text-muted self-center"
+    }, "Nomor WhatsApp donatur belum diisi.")));
+  }
+  function ProofModal({ id, onClose }) {
+    const { donations } = useDerived();
+    const d = donations.find((x) => x.id === id);
+    const [url, setUrl] = useState(null);
+    const [state, setState] = useState("loading");
+    const path = d ? d.proof_url : null;
+    useEffect(() => {
+      let off = false;
+      if (!path) {
+        setState("none");
+        return;
+      }
+      if (/^https?:/.test(path)) {
+        setUrl(path);
+        setState("ok");
+        return;
+      }
+      setState("loading");
+      sb.storage.from("proofs").createSignedUrl(path, 3600).then((r) => {
+        if (off)
+          return;
+        if (r.error || !r.data)
+          setState("error");
+        else {
+          setUrl(r.data.signedUrl);
+          setState("ok");
+        }
+      });
+      return () => {
+        off = true;
+      };
+    }, [path]);
+    if (!d)
+      return null;
+    return /* @__PURE__ */ React.createElement(Sheet, {
+      title: "Bukti pembayaran",
+      onClose
+    }, state === "ok" ? /* @__PURE__ */ React.createElement("img", {
+      src: url,
+      alt: "Bukti pembayaran",
+      className: "rounded-xl mx-auto max-h-[60vh]"
+    }) : /* @__PURE__ */ React.createElement("div", {
+      className: "rounded-xl bg-surface-2 border border-line p-8 text-center"
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Image",
+      size: 28,
+      className: "mx-auto text-muted"
+    }), /* @__PURE__ */ React.createElement("div", {
+      className: "font-semibold mt-2"
+    }, state === "loading" ? "Memuat bukti…" : state === "error" ? "Bukti tidak dapat dibuka" : "Tidak ada bukti"), state === "error" ? /* @__PURE__ */ React.createElement("p", {
+      className: "text-[13px] text-muted mt-1"
+    }, "Berkas tidak ditemukan atau izin akses ditolak.") : null), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[13.5px] text-ink-2 mt-3 text-center"
+    }, rupiah(d.amount), " · ", d.payment_method, " · ", d.donor ? d.donor.name : ""));
+  }
+  function InstallGuide({ onClose, deferred, onPrompt }) {
+    const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const steps = ios ? ["Buka halaman ini di Safari.", "Ketuk tombol Bagikan (kotak dengan panah ke atas) di bilah bawah.", 'Gulir, lalu pilih "Tambah ke Layar Utama".', 'Ketuk "Tambah". Ikon RPI muncul di beranda HP.'] : ["Buka halaman ini di Chrome.", "Ketuk menu titik tiga di kanan atas.", 'Pilih "Instal aplikasi" atau "Tambahkan ke layar utama".', 'Ketuk "Instal". Ikon RPI muncul di beranda HP.'];
+    return /* @__PURE__ */ React.createElement(Sheet, {
+      title: "Tambahkan ke Layar Utama",
+      onClose
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center gap-3 mb-4"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "w-16 h-14 rounded-xl bg-white border border-line p-1 flex items-center justify-center"
+    }, /* @__PURE__ */ React.createElement("img", {
+      src: LOGO,
+      alt: "",
+      className: "max-h-full"
+    })), /* @__PURE__ */ React.createElement("p", {
+      className: "text-[14px] text-ink-2"
+    }, "Pasang RPI Donasi agar terbuka layar penuh seperti aplikasi biasa dan lebih cepat dari beranda HP.")), deferred ? /* @__PURE__ */ React.createElement("button", {
+      className: CTA + " w-full mb-4",
+      onClick: onPrompt
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Download",
+      size: 18
+    }), "Pasang sekarang") : null, /* @__PURE__ */ React.createElement("ol", {
+      className: "grid gap-2.5"
+    }, steps.map((s, i) => /* @__PURE__ */ React.createElement("li", {
+      key: i,
+      className: "flex gap-3 items-start"
+    }, /* @__PURE__ */ React.createElement("span", {
+      className: "w-7 h-7 shrink-0 rounded-full bg-infobg text-infofg font-bold text-[13px] flex items-center justify-center"
+    }, i + 1), /* @__PURE__ */ React.createElement("span", {
+      className: "text-[14.5px] pt-0.5"
+    }, s)))));
+  }
+  function useInstall() {
+    const isStandalone = () => {
+      try {
+        return window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true || lsGet(LS_INSTALLED) === "1";
+      } catch (e) {
+        return false;
+      }
+    };
+    const [standalone, setStandalone] = useState(isStandalone);
+    const [deferred, setDeferred] = useState(null);
+    const [dismissed, setDismissed] = useState(lsGet(LS_DISMISS) === "1");
+    useEffect(() => {
+      let mq;
+      try {
+        mq = window.matchMedia("(display-mode: standalone)");
+      } catch (e) {}
+      const onMode = () => setStandalone(isStandalone());
+      const onPrompt = (e) => {
+        e.preventDefault();
+        setDeferred(e);
+      };
+      const onInstalled = () => {
+        lsSet(LS_INSTALLED, "1");
+        setStandalone(true);
+        setDeferred(null);
+      };
+      if (mq && mq.addEventListener)
+        mq.addEventListener("change", onMode);
+      window.addEventListener("beforeinstallprompt", onPrompt);
+      window.addEventListener("appinstalled", onInstalled);
+      return () => {
+        if (mq && mq.removeEventListener)
+          mq.removeEventListener("change", onMode);
+        window.removeEventListener("beforeinstallprompt", onPrompt);
+        window.removeEventListener("appinstalled", onInstalled);
+      };
+    }, []);
+    const mobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const show = mobile && !standalone && !dismissed;
+    const dismiss = () => {
+      lsSet(LS_DISMISS, "1");
+      setDismissed(true);
+    };
+    const prompt = async () => {
+      if (!deferred)
+        return;
+      try {
+        deferred.prompt();
+        const r = await deferred.userChoice;
+        if (r && r.outcome === "accepted") {
+          lsSet(LS_INSTALLED, "1");
+          setStandalone(true);
+        }
+      } catch (e) {}
+      setDeferred(null);
+    };
+    return { show, deferred, dismiss, prompt };
+  }
+  function authError(x) {
+    const m = x && x.message || "";
+    if (/Invalid login credentials/i.test(m))
+      return "Email atau password salah.";
+    if (/Email not confirmed/i.test(m))
+      return "Email belum dikonfirmasi. Buka email konfirmasi dari RPI lalu coba lagi.";
+    if (/already registered|already been registered/i.test(m))
+      return "Email ini sudah terdaftar. Silakan masuk.";
+    if (/Password should be at least/i.test(m))
+      return "Password terlalu pendek.";
+    if (/rate limit|too many/i.test(m))
+      return "Terlalu banyak percobaan. Tunggu beberapa menit.";
+    return friendlyError(x);
+  }
+  function AuthScreen({ recovery, onRecovered }) {
+    const [mode, setMode] = useState(recovery ? "recovery" : "login");
+    const [f, setF] = useState({ name: "", phone: "", email: "", password: "" });
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState(null);
+    useEffect(() => {
+      if (recovery)
+        setMode("recovery");
+    }, [recovery]);
+    const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+    const go = (m) => {
+      setMode(m);
+      setMsg(null);
+    };
+    async function submit(e) {
+      e.preventDefault();
+      if (busy)
+        return;
+      setMsg(null);
+      const email = f.email.trim();
+      if (mode !== "recovery" && !email)
+        return setMsg({ kind: "bad", text: "Isi alamat email." });
+      setBusy(true);
+      try {
+        if (mode === "login") {
+          const r = await sb.auth.signInWithPassword({ email, password: f.password });
+          if (r.error)
+            throw r.error;
+        } else if (mode === "signup") {
+          if (!f.name.trim())
+            throw new Error("Nama lengkap wajib diisi.");
+          if (f.password.length < 8)
+            throw new Error("Password minimal 8 karakter.");
+          const r = await sb.auth.signUp({ email, password: f.password, options: { data: { full_name: f.name.trim(), phone: f.phone.trim() } } });
+          if (r.error)
+            throw r.error;
+          if (!r.data.session) {
+            setMode("login");
+            setMsg({ kind: "ok", text: "Pendaftaran berhasil. Cek email Anda untuk konfirmasi, lalu masuk." });
+          }
+        } else if (mode === "forgot") {
+          const r = await sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin });
+          if (r.error)
+            throw r.error;
+          setMsg({ kind: "ok", text: "Tautan reset password sudah dikirim ke email Anda." });
+        } else {
+          if (f.password.length < 8)
+            throw new Error("Password minimal 8 karakter.");
+          const r = await sb.auth.updateUser({ password: f.password });
+          if (r.error)
+            throw r.error;
+          onRecovered();
+        }
+      } catch (x) {
+        setMsg({ kind: "bad", text: authError(x) });
+      }
+      setBusy(false);
+    }
+    const title = { login: "Masuk", signup: "Daftar relawan", forgot: "Lupa password", recovery: "Buat password baru" }[mode];
+    return /* @__PURE__ */ React.createElement("div", {
+      className: "min-h-screen hero-grad flex items-center justify-center gutter",
+      style: { paddingBlock: "24px" }
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "w-full max-w-md bg-surface text-ink rounded-3xl p-6 shadow-xl"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center gap-3 mb-5"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "w-16 h-14 rounded-xl bg-white border border-line flex items-center justify-center p-1 shrink-0"
+    }, /* @__PURE__ */ React.createElement("img", {
+      src: LOGO,
+      alt: "Logo RPI",
+      className: "max-h-full max-w-full object-contain"
+    })), /* @__PURE__ */ React.createElement("div", {
+      className: "min-w-0"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[19px] leading-tight"
+    }, "Rumah Pelopor Indonesia"), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[13px] text-muted"
+    }, "Laporan kunjungan & donasi lapangan"))), /* @__PURE__ */ React.createElement("h1", {
+      className: "font-display font-bold text-[24px] mb-4"
+    }, title), /* @__PURE__ */ React.createElement("form", {
+      className: "grid gap-3.5",
+      onSubmit: submit,
+      noValidate: true
+    }, mode === "signup" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", {
+      className: LABEL,
+      htmlFor: "a-name"
+    }, "Nama lengkap"), /* @__PURE__ */ React.createElement("input", {
+      id: "a-name",
+      className: INPUT,
+      autoComplete: "name",
+      value: f.name,
+      onChange: set("name")
+    })), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", {
+      className: LABEL,
+      htmlFor: "a-phone"
+    }, "Nomor WhatsApp"), /* @__PURE__ */ React.createElement("input", {
+      id: "a-phone",
+      className: INPUT,
+      inputMode: "tel",
+      autoComplete: "tel",
+      value: f.phone,
+      onChange: set("phone")
+    }))) : null, mode !== "recovery" ? /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", {
+      className: LABEL,
+      htmlFor: "a-email"
+    }, "Email"), /* @__PURE__ */ React.createElement("input", {
+      id: "a-email",
+      type: "email",
+      className: INPUT,
+      autoComplete: "email",
+      value: f.email,
+      onChange: set("email")
+    })) : null, mode !== "forgot" ? /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("label", {
+      className: LABEL,
+      htmlFor: "a-pass"
+    }, mode === "recovery" ? "Password baru" : "Password"), /* @__PURE__ */ React.createElement("input", {
+      id: "a-pass",
+      type: "password",
+      className: INPUT,
+      autoComplete: mode === "login" ? "current-password" : "new-password",
+      value: f.password,
+      onChange: set("password")
+    })) : null, msg ? /* @__PURE__ */ React.createElement("div", {
+      role: "alert",
+      className: "rounded-xl px-4 py-3 text-[14px] font-semibold " + (msg.kind === "ok" ? "bg-okbg text-okfg" : "bg-badbg text-badfg")
+    }, msg.text) : null, /* @__PURE__ */ React.createElement("button", {
+      type: "submit",
+      disabled: busy,
+      className: CTA + " w-full min-h-[50px] text-[16px]"
+    }, busy ? "Memproses…" : mode === "login" ? "Masuk" : mode === "signup" ? "Daftar" : mode === "forgot" ? "Kirim tautan reset" : "Simpan password")), /* @__PURE__ */ React.createElement("div", {
+      className: "mt-4 grid gap-1 text-[14px]"
+    }, mode === "login" ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("button", {
+      className: "text-brand font-semibold min-h-[40px] text-left",
+      onClick: () => go("forgot")
+    }, "Lupa password?"), /* @__PURE__ */ React.createElement("button", {
+      className: "text-brand font-semibold min-h-[40px] text-left",
+      onClick: () => go("signup")
+    }, "Belum punya akun? Daftar sebagai relawan")) : mode !== "recovery" ? /* @__PURE__ */ React.createElement("button", {
+      className: "text-brand font-semibold min-h-[40px] text-left",
+      onClick: () => go("login")
+    }, "Kembali ke halaman masuk") : null)));
+  }
+  function Splash({ text, children }) {
+    return /* @__PURE__ */ React.createElement("div", {
+      className: "min-h-screen bg-bg text-ink flex items-center justify-center gutter",
+      style: { paddingBlock: "24px" }
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "text-center max-w-sm"
+    }, /* @__PURE__ */ React.createElement("img", {
+      src: LOGO,
+      alt: "",
+      className: "h-16 mx-auto mb-4"
+    }), /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[18px]"
+    }, text), children));
+  }
+  function App() {
+    const [toast, setToast] = useState(null);
+    const notify = useCallback((msg, kind) => setToast({ msg, kind: kind || "ok", k: Date.now() }), []);
+    const [session, setSession] = useState(undefined);
+    const [recovery, setRecovery] = useState(false);
+    const [tab, setTab] = useState(null);
+    const [receipt, openReceipt] = useState(null);
+    const [proof, openProof] = useState(null);
+    const [installOpen, setInstallOpen] = useState(false);
+    const [waiting, setWaiting] = useState(null);
+    const install = useInstall();
+    const online = useOnline();
+    const user = session ? session.user : null;
+    const { db, ready, actions } = useStore(user, notify);
+    useEffect(() => {
+      if (!sb)
+        return;
+      sb.auth.getSession().then((r) => setSession(r.data.session || null));
+      const sub = sb.auth.onAuthStateChange((ev, s) => {
+        setSession(s);
+        if (ev === "PASSWORD_RECOVERY")
+          setRecovery(true);
+      });
+      return () => sub.data.subscription.unsubscribe();
+    }, []);
+    useEffect(() => {
+      if (!toast)
+        return;
+      const t = setTimeout(() => setToast(null), 3400);
+      return () => clearTimeout(t);
+    }, [toast]);
+    useEffect(() => {
+      if (!("serviceWorker" in navigator))
+        return;
+      let refreshing = false;
+      navigator.serviceWorker.register("/sw.js").then((reg) => {
+        const watch = (w) => w.addEventListener("statechange", () => {
+          if (w.state === "installed" && navigator.serviceWorker.controller)
+            setWaiting(w);
+        });
+        if (reg.waiting && navigator.serviceWorker.controller)
+          setWaiting(reg.waiting);
+        reg.addEventListener("updatefound", () => {
+          if (reg.installing)
+            watch(reg.installing);
+        });
+      }).catch(() => {});
+      navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (refreshing)
+          return;
+        refreshing = true;
+        location.reload();
+      });
+    }, []);
+    if (!sb)
+      return /* @__PURE__ */ React.createElement(Splash, {
+        text: "Konfigurasi Supabase belum diisi"
+      }, /* @__PURE__ */ React.createElement("p", {
+        className: "text-[14px] text-muted mt-2"
+      }, "Isi SUPABASE_URL dan SUPABASE_ANON_KEY di berkas config.js."));
+    if (session === undefined)
+      return /* @__PURE__ */ React.createElement(Splash, {
+        text: "Memuat…"
+      });
+    if (!session || recovery)
+      return /* @__PURE__ */ React.createElement(AuthScreen, {
+        recovery,
+        onRecovered: () => setRecovery(false)
+      });
+    if (!ready)
+      return /* @__PURE__ */ React.createElement(Splash, {
+        text: "Memuat data…"
+      });
+    const me = db.profiles.find((p) => p.id === user.id);
+    const signOut = () => {
+      sb.auth.signOut();
+    };
+    if (!me)
+      return /* @__PURE__ */ React.createElement(Splash, {
+        text: "Profil Anda belum tersedia"
+      }, /* @__PURE__ */ React.createElement("p", {
+        className: "text-[14px] text-muted mt-2"
+      }, "Hubungi admin RPI untuk mengaktifkan akun ini."), /* @__PURE__ */ React.createElement("button", {
+        className: GHOST + " mt-4",
+        onClick: signOut
+      }, "Keluar"));
+    const role = me.role;
+    const nav = NAV[role];
+    const cur = nav.some((n) => n.id === tab) ? tab : nav[0].id;
+    const goTab = (t) => {
+      setTab(t);
+      window.scrollTo(0, 0);
+    };
+    const ctx = { db, actions, notify, me, role, setTab: goTab, openReceipt, openProof, openInstall: () => setInstallOpen(true) };
+    const titles = { home: "Beranda", report: "Laporan Kunjungan", history: "Riwayat Kunjungan", monitor: "Monitoring Tim", moves: "Pergerakan Lapangan", dash: "Executive Dashboard", verify: "Verifikasi Donasi", master: "Master Data & Setting", export: "Ekspor Data" };
+    let view = null;
+    if (role === "volunteer")
+      view = cur === "home" ? /* @__PURE__ */ React.createElement(VolunteerHome, null) : cur === "report" ? /* @__PURE__ */ React.createElement(ReportForm, null) : /* @__PURE__ */ React.createElement(History, null);
+    else if (role === "coordinator")
+      view = cur === "monitor" ? /* @__PURE__ */ React.createElement(Monitoring, null) : /* @__PURE__ */ React.createElement(Moves, null);
+    else
+      view = cur === "dash" ? /* @__PURE__ */ React.createElement(Dashboard, null) : cur === "verify" ? /* @__PURE__ */ React.createElement(Verify, null) : cur === "master" ? /* @__PURE__ */ React.createElement(MasterData, null) : /* @__PURE__ */ React.createElement(ExportView, null);
+    const pendingCount = db.donations.filter((d) => d.verification_status === "Pending").length;
+    return /* @__PURE__ */ React.createElement(Ctx.Provider, {
+      value: ctx
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "min-h-screen bg-bg text-ink"
+    }, /* @__PURE__ */ React.createElement("header", {
+      className: "hero-grad text-white"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "gutter max-w-6xl mx-auto",
+      style: { paddingTop: "calc(14px + env(safe-area-inset-top, 0px))", paddingBottom: "14px" }
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center justify-between gap-3"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center gap-3 min-w-0"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "w-14 h-12 rounded-xl bg-white flex items-center justify-center p-1 shrink-0"
+    }, /* @__PURE__ */ React.createElement("img", {
+      src: db.settings.org_logo_url || LOGO,
+      alt: "Logo RPI",
+      className: "max-h-full max-w-full object-contain"
+    })), /* @__PURE__ */ React.createElement("div", {
+      className: "min-w-0"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "font-display font-bold text-[18px] leading-tight truncate"
+    }, db.settings.org_name), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[12.5px] opacity-90 truncate"
+    }, me.full_name, " · ", ROLE_LABEL[role]))), /* @__PURE__ */ React.createElement("div", {
+      className: "flex items-center gap-2 shrink-0"
+    }, /* @__PURE__ */ React.createElement("span", {
+      className: "hidden sm:inline-flex items-center gap-1.5 rounded-full bg-white/20 text-[12.5px] font-semibold px-3 min-h-[32px]"
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: online ? "Wifi" : "WifiOff",
+      size: 14
+    }), online ? "Online" : "Offline"), /* @__PURE__ */ React.createElement("button", {
+      onClick: signOut,
+      className: "inline-flex items-center gap-1.5 rounded-full bg-white/20 hover:bg-white/30 text-white text-[12.5px] font-semibold px-3 min-h-[36px] focus:outline-none focus-visible:ring-2 focus-visible:ring-white",
+      "aria-label": "Keluar"
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "LogOut",
+      size: 15
+    }), "Keluar"))))), !online ? /* @__PURE__ */ React.createElement("div", {
+      role: "status",
+      className: "bg-warnbg text-warnfg text-center text-[13.5px] font-semibold py-2 gutter"
+    }, "Tidak ada internet. Data terbaru tidak dapat dimuat atau dikirim.") : null, /* @__PURE__ */ React.createElement("div", {
+      className: "gutter max-w-6xl mx-auto md:grid md:grid-cols-[210px_minmax(0,1fr)] md:gap-6",
+      style: { paddingBlock: "16px 112px" }
+    }, /* @__PURE__ */ React.createElement("aside", {
+      className: "hidden md:block"
+    }, /* @__PURE__ */ React.createElement("nav", {
+      className: "sticky top-4 grid gap-1",
+      "aria-label": "Navigasi utama"
+    }, nav.map((n) => /* @__PURE__ */ React.createElement("button", {
+      key: n.id,
+      onClick: () => goTab(n.id),
+      "aria-current": cur === n.id ? "page" : undefined,
+      className: "flex items-center gap-3 min-h-[46px] px-3 rounded-xl text-[15px] font-semibold text-left transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 " + (cur === n.id ? "bg-infobg text-infofg" : "text-ink-2 hover:bg-surface-2")
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: n.icon,
+      size: 19
+    }), n.label, n.id === "verify" && pendingCount ? /* @__PURE__ */ React.createElement("span", {
+      className: "ml-auto bg-pink-600 text-white text-[11.5px] rounded-full px-2 py-0.5 num"
+    }, pendingCount) : null)))), /* @__PURE__ */ React.createElement("main", {
+      className: "min-w-0"
+    }, waiting ? /* @__PURE__ */ React.createElement("div", {
+      className: "rounded-2xl p-4 mb-4 flex items-center gap-3 border border-line bg-okbg text-okfg"
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "RefreshCw",
+      size: 20,
+      className: "shrink-0"
+    }), /* @__PURE__ */ React.createElement("div", {
+      className: "min-w-0 flex-1 font-bold text-[14.5px]"
+    }, "Versi baru aplikasi tersedia"), /* @__PURE__ */ React.createElement("button", {
+      className: SMALL + " bg-pink-600 hover:bg-pink-700 text-white shrink-0",
+      onClick: () => waiting.postMessage({ type: "SKIP_WAITING" })
+    }, "Muat ulang")) : null, install.show ? /* @__PURE__ */ React.createElement("div", {
+      className: "rounded-2xl p-4 mb-4 flex items-center gap-3 border border-line bg-infobg text-infofg"
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "Smartphone",
+      size: 22,
+      className: "shrink-0"
+    }), /* @__PURE__ */ React.createElement("div", {
+      className: "min-w-0 flex-1"
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "font-bold text-[14.5px]"
+    }, "Pasang RPI di layar utama"), /* @__PURE__ */ React.createElement("div", {
+      className: "text-[12.5px] opacity-90"
+    }, "Buka lebih cepat, tampil layar penuh.")), /* @__PURE__ */ React.createElement("button", {
+      className: SMALL + " bg-pink-600 hover:bg-pink-700 text-white shrink-0",
+      onClick: () => install.deferred ? install.prompt() : setInstallOpen(true)
+    }, "Pasang"), /* @__PURE__ */ React.createElement("button", {
+      className: SMALL + " shrink-0 px-2",
+      onClick: install.dismiss,
+      "aria-label": "Tutup banner"
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: "X",
+      size: 16
+    }))) : null, /* @__PURE__ */ React.createElement("h1", {
+      className: "font-display font-bold text-[24px] md:text-[28px] leading-tight mb-4 text-balance"
+    }, titles[cur]), view)), /* @__PURE__ */ React.createElement("nav", {
+      className: "md:hidden fixed bottom-0 inset-x-0 z-30 bg-surface border-t border-line",
+      "aria-label": "Navigasi utama",
+      style: { paddingBottom: "env(safe-area-inset-bottom, 0px)", paddingLeft: "max(8px, env(safe-area-inset-left, 0px))", paddingRight: "max(8px, env(safe-area-inset-right, 0px))" }
+    }, /* @__PURE__ */ React.createElement("div", {
+      className: "grid",
+      style: { gridTemplateColumns: "repeat(" + nav.length + ", minmax(0, 1fr))" }
+    }, nav.map((n) => {
+      const on = cur === n.id;
+      const cta = n.id === "report";
+      return /* @__PURE__ */ React.createElement("button", {
+        key: n.id,
+        onClick: () => goTab(n.id),
+        "aria-current": on ? "page" : undefined,
+        className: "relative flex flex-col items-center justify-center gap-0.5 min-h-[58px] text-[11.5px] font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-xl",
+        style: { color: on ? "var(--brand)" : "var(--muted)" }
+      }, cta ? /* @__PURE__ */ React.createElement("span", {
+        className: "w-11 h-11 -mt-5 rounded-full bg-pink-600 text-white flex items-center justify-center shadow-lg border-4",
+        style: { borderColor: "var(--surface)" }
+      }, /* @__PURE__ */ React.createElement(Icon, {
+        name: "Plus",
+        size: 22
+      })) : /* @__PURE__ */ React.createElement(Icon, {
+        name: n.icon,
+        size: 22
+      }), n.label, n.id === "verify" && pendingCount ? /* @__PURE__ */ React.createElement("span", {
+        className: "absolute top-1.5 right-[22%] bg-pink-600 text-white text-[10.5px] rounded-full px-1.5 num"
+      }, pendingCount) : null);
+    }))), toast ? /* @__PURE__ */ React.createElement("div", {
+      key: toast.k,
+      role: "status",
+      className: "fixed z-40 left-1/2 -translate-x-1/2 max-w-[92%] rounded-xl px-4 py-3 text-[14px] font-semibold shadow-xl flex items-center gap-2",
+      style: { bottom: "calc(84px + env(safe-area-inset-bottom, 0px))", background: toast.kind === "bad" ? "#be123c" : "#0f172a", color: "#fff" }
+    }, /* @__PURE__ */ React.createElement(Icon, {
+      name: toast.kind === "bad" ? "AlertCircle" : "CheckCircle2",
+      size: 18,
+      className: "shrink-0"
+    }), /* @__PURE__ */ React.createElement("span", null, toast.msg)) : null, receipt ? /* @__PURE__ */ React.createElement(ReceiptModal, {
+      id: receipt,
+      onClose: () => openReceipt(null)
+    }) : null, proof ? /* @__PURE__ */ React.createElement(ProofModal, {
+      id: proof,
+      onClose: () => openProof(null)
+    }) : null, installOpen ? /* @__PURE__ */ React.createElement(InstallGuide, {
+      onClose: () => setInstallOpen(false),
+      deferred: install.deferred,
+      onPrompt: () => {
+        install.prompt();
+        setInstallOpen(false);
+      }
+    }) : null));
+  }
+  ReactDOM.createRoot(document.getElementById("root")).render(/* @__PURE__ */ React.createElement(App, null));
+})();
