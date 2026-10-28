@@ -3,8 +3,8 @@
    - Halaman: network-first, jatuh ke cache saat offline.
    - Data Supabase (API, Auth, Storage, Realtime) TIDAK pernah di-cache, agar data donasi selalu segar dan aman.
    Naikkan VERSION setiap kali berkas di public/ berubah. */
-const VERSION = 'rpi-v1';
-const SHELL = ['/', '/app.js', '/app.css', '/config.js', '/tailwind.config.js', '/manifest.json', '/icons/logo.png', '/icons/rpi-192.png'];
+const VERSION = 'rpi-v2';
+const SHELL = ['/', '/manifest.json', '/icons/logo.png', '/icons/rpi-192.png'];
 const CDN_HOSTS = ['cdn.tailwindcss.com', 'cdnjs.cloudflare.com', 'unpkg.com', 'cdn.jsdelivr.net', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 
 self.addEventListener('install', (event) => {
